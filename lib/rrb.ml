@@ -16,27 +16,6 @@ let ( <@ ) src x =
 
 let ( -$ ) x y = if x >= y then Some (x - y) else None
 
-type (_, _) index =
-  | Z : ('elt, 'elt) index
-  | Succ : int * ('arr, 'elt) index -> ('arr array, 'elt) index
-
-let rec ( .!() ) : 'arr 'elt. 'arr -> ('arr, 'elt) index -> 'elt =
-  fun (type arr elt) (arr : arr) (index : (arr, elt) index) : elt ->
-   match index with
-   | Z -> arr
-   | Succ (i, index) -> arr.(i).!(index)
-;;
-
-let rec copy_update : 'arr 'elt. 'arr -> ('arr, 'elt) index -> 'elt -> 'arr =
-  fun (type arr elt) (arr : arr) (index : (arr, elt) index) (elt : elt) : arr ->
-   match index with
-   | Z -> elt
-   | Succ (i, index) ->
-     let c = Array.copy arr in
-     c.(i) <- copy_update c.(i) index elt;
-     c
-;;
-
 type _ spine =
   | Base : 'data array -> 'data array spine
   | Spine :
@@ -51,12 +30,14 @@ type _ spine =
       -> 'data spine
 
 type (_, _) depth =
-  | One : ('elt array, 'elt) depth
+  | Zero : ('elt, 'elt) depth
   | Nested :
       { inner_size : int
       ; depth : ('arr, 'elt) depth
       }
       -> ('arr array, 'elt) depth
+
+let one = Nested { inner_size = 1; depth = Zero }
 
 type t = elt array spine
 
@@ -66,7 +47,7 @@ include struct
   let rec sexp_of_arrays : 'arr. 'arr -> depth:('arr, elt) depth -> Sexp.t =
     fun (type arr) (arr : arr) ~(depth : (arr, elt) depth) : Sexp.t ->
      match depth with
-     | One -> [%sexp (arr : int array)]
+     | Zero -> [%sexp (arr : int)]
      | Nested { inner_size = _; depth } ->
        [%sexp (Array.map arr ~f:(sexp_of_arrays ~depth) : Sexp.t array)]
   ;;
@@ -85,7 +66,7 @@ include struct
          }]
   ;;
 
-  let sexp_of_t t : Sexp.t = sexp_of_spine t ~depth:One
+  let sexp_of_t t : Sexp.t = sexp_of_spine t ~depth:one
 end
 
 let length (t : t) =
@@ -97,10 +78,7 @@ let length (t : t) =
 let rec multi_get : 'arr 'elt. ('arr, 'elt) depth -> 'arr -> int -> 'elt =
   fun (type arr elt) (depth : (arr, elt) depth) (arr : arr) (i : int) : elt ->
    match depth with
-   | One ->
-     if i >= 0 && i < Array.length arr
-     then arr.(i)
-     else Core.raise_s [%sexp "OOB:", (i : Core.int), (Array.length arr : Core.int)]
+   | Zero -> if i = 0 then arr else invalid_arg "index out of bounds"
    | Nested { inner_size; depth } ->
      if i < 0 || i / inner_size >= Array.length arr
      then Core.(raise_s [%sexp "OOB:", (i : int), (Array.length arr : int)])
@@ -120,15 +98,12 @@ let rec get : 'arr. 'arr spine -> depth:('arr, elt) depth -> int -> elt =
          | None -> get data ~depth:(Nested { inner_size = width; depth }) i))
 ;;
 
-let get (t : t) i = get t ~depth:One i
+let get (t : t) i = get t ~depth:one i
 
 let rec multi_set : 'arr 'elt. ('arr, 'elt) depth -> 'arr -> int -> 'elt -> 'arr =
   fun (type arr elt) (depth : (arr, elt) depth) (arr : arr) (i : int) (elt : elt) : arr ->
    match depth with
-   | One ->
-     let c = Array.copy arr in
-     c.(i) <- elt;
-     c
+   | Zero -> if i = 0 then elt else invalid_arg "index out of bounds"
    | Nested { inner_size; depth } ->
      let c = Array.copy arr in
      c.(i / inner_size) <- multi_set depth arr.(i / inner_size) (i mod inner_size) elt;
@@ -153,7 +128,7 @@ let rec set : 'arr. 'arr spine -> depth:('arr, elt) depth -> int -> elt -> 'arr 
              }))
 ;;
 
-let set (t : t) i x = set t ~depth:One i x
+let set (t : t) i x = set t ~depth:one i x
 
 let%test_module _ =
   (module struct
@@ -163,7 +138,7 @@ let%test_module _ =
     let rec actual_len' : 'arr. 'arr -> depth:('arr, elt) depth -> int =
       fun (type arr) (arr : arr) ~(depth : (arr, elt) depth) : int ->
        match depth with
-       | One -> Array.length arr
+       | Zero -> 1
        | Nested { inner_size = _; depth } ->
          Array.sum (module Int) arr ~f:(actual_len' ~depth)
     ;;
@@ -181,6 +156,7 @@ let%test_module _ =
          prefix_len + data_len + suffix_len
     ;;
 
+    let actual_len (t : t) = actual_len t ~depth:one
     let w = 2
     let arr1 ~offset = Array.init w ~f:(fun i -> offset + i)
     let arr2 ~offset = Array.init w ~f:(fun i -> arr1 ~offset:(offset + (i * w)))
@@ -246,8 +222,8 @@ let%test_module _ =
     let%expect_test "length" =
       print_s [%sexp (length t : int)];
       [%expect {| 20 |}];
-      print_s [%sexp ~~(actual_len t ~depth:One : int)];
-      [%expect {| ("actual_len t ~depth:One" 20) |}]
+      print_s [%sexp ~~(actual_len t : int)];
+      [%expect {| ("actual_len t" 20) |}]
     ;;
 
     let%expect_test "get" =
