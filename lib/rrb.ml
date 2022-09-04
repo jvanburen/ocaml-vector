@@ -122,6 +122,39 @@ let rec get : 'arr. 'arr spine -> depth:('arr, elt) depth -> int -> elt =
 
 let get (t : t) i = get t ~depth:One i
 
+let rec multi_set : 'arr 'elt. ('arr, 'elt) depth -> 'arr -> int -> 'elt -> 'arr =
+  fun (type arr elt) (depth : (arr, elt) depth) (arr : arr) (i : int) (elt : elt) : arr ->
+   match depth with
+   | One ->
+     let c = Array.copy arr in
+     c.(i) <- elt;
+     c
+   | Nested { inner_size; depth } ->
+     let c = Array.copy arr in
+     c.(i / inner_size) <- multi_set depth arr.(i / inner_size) (i mod inner_size) elt;
+     c
+;;
+
+let rec set : 'arr. 'arr spine -> depth:('arr, elt) depth -> int -> elt -> 'arr spine =
+  fun (type arr) (spine : arr spine) ~(depth : (arr, elt) depth) (i : int) (elt : elt)
+    : arr spine ->
+   match spine with
+   | Base arr -> Base (multi_set depth arr i elt)
+   | Spine ({ prefix_len; data_len; suffix_len = _; width; prefix; suffix; data } as s) ->
+     (match i -$ prefix_len with
+      | None -> Spine { s with prefix = multi_set depth prefix i elt }
+      | Some i ->
+        (match i -$ data_len with
+         | Some i -> Spine { s with suffix = multi_set depth suffix i elt }
+         | None ->
+           Spine
+             { s with
+               data = set data ~depth:(Nested { inner_size = width; depth }) i elt
+             }))
+;;
+
+let set (t : t) i x = set t ~depth:One i x
+
 let%test_module _ =
   (module struct
     open! Core
@@ -172,6 +205,24 @@ let%test_module _ =
               ; data = Base (arr3 ~offset:106)
               }
         }
+    ;;
+
+    let%expect_test "set" =
+      print_s [%sexp (set t 0 1337 : t)];
+      [%expect
+        {|
+        ((prefix (1337 1))
+         (data (
+           (prefix (
+             (102 103)
+             (104 105)))
+           (data (
+             ((106 107) (108 109))
+             ((110 111) (112 113))))
+           (suffix (
+             (114 115)
+             (116 117)))))
+         (suffix (18 19))) |}]
     ;;
 
     let%expect_test "t" =
