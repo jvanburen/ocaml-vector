@@ -1,0 +1,4 @@
+(test
+ (name rrb)
+ (libraries rrb)
+)
