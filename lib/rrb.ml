@@ -1,5 +1,7 @@
 type elt = int
 
+let width = 2
+
 let ( @> ) src x =
   let len = Array.length src in
   let dst = Array.make (len + 1) x in
@@ -7,7 +9,7 @@ let ( @> ) src x =
   dst
 ;;
 
-let ( <@ ) src x =
+let ( <@ ) x src =
   let len = Array.length src in
   let dst = Array.make (len + 1) x in
   ArrayLabels.blit ~src ~src_pos:0 ~dst ~dst_pos:1 ~len;
@@ -17,7 +19,11 @@ let ( <@ ) src x =
 let ( -$ ) x y = if x >= y then Some (x - y) else None
 
 type _ spine =
-  | Base : 'data array -> 'data array spine
+  | Base :
+      { len : int
+      ; data : 'data array
+      }
+      -> 'data array spine
   | Spine :
       { prefix_len : int
       ; data_len : int
@@ -55,24 +61,35 @@ include struct
   let rec sexp_of_spine : 'arr. 'arr spine -> depth:('arr, elt) depth -> Sexp.t =
     fun (type arr) (spine : arr spine) ~(depth : (arr, elt) depth) : Sexp.t ->
      match spine with
-     | Base arr -> sexp_of_arrays arr ~depth
-     | Spine { prefix_len = _; data_len = _; suffix_len = _; width; prefix; suffix; data }
-       ->
+     | Base { len; data } ->
+       [%sexp { len : int; data = (sexp_of_arrays data ~depth : Sexp.t) }]
+     | Spine { prefix_len; data_len; suffix_len; width; prefix; suffix; data } ->
        [%sexp
          { prefix = (sexp_of_arrays prefix ~depth : Sexp.t)
+         ; prefix_len : int
          ; data =
              (sexp_of_spine data ~depth:(Nested { inner_size = width; depth }) : Sexp.t)
+         ; data_len : int
          ; suffix = (sexp_of_arrays suffix ~depth : Sexp.t)
+         ; suffix_len : int
          }]
   ;;
 
   let sexp_of_t t : Sexp.t = sexp_of_spine t ~depth:one
 end
 
+let empty = Base { len = 0; data = [||] }
+
 let length (t : t) =
   match t with
   | Spine s -> s.prefix_len + s.data_len + s.suffix_len
-  | Base a -> Array.length a
+  | Base b -> b.len
+;;
+
+let depth_width (type a b) (depth : (a, b) depth) =
+  match depth with
+  | Zero -> 1
+  | Nested { inner_size; _ } -> inner_size
 ;;
 
 let rec multi_get : 'arr 'elt. ('arr, 'elt) depth -> 'arr -> int -> 'elt =
@@ -88,7 +105,7 @@ let rec multi_get : 'arr 'elt. ('arr, 'elt) depth -> 'arr -> int -> 'elt =
 let rec get : 'arr. 'arr spine -> depth:('arr, elt) depth -> int -> elt =
   fun (type arr) (spine : arr spine) ~(depth : (arr, elt) depth) (i : int) : elt ->
    match spine with
-   | Base arr -> multi_get depth arr i
+   | Base b -> multi_get depth b.data i
    | Spine { prefix_len; data_len; suffix_len = _; width; prefix; suffix; data } ->
      (match i -$ prefix_len with
       | None -> multi_get depth prefix i
@@ -114,7 +131,7 @@ let rec set : 'arr. 'arr spine -> depth:('arr, elt) depth -> int -> elt -> 'arr 
   fun (type arr) (spine : arr spine) ~(depth : (arr, elt) depth) (i : int) (elt : elt)
     : arr spine ->
    match spine with
-   | Base arr -> Base (multi_set depth arr i elt)
+   | Base { len; data } -> Base { len; data = multi_set depth data i elt }
    | Spine ({ prefix_len; data_len; suffix_len = _; width; prefix; suffix; data } as s) ->
      (match i -$ prefix_len with
       | None -> Spine { s with prefix = multi_set depth prefix i elt }
@@ -130,6 +147,45 @@ let rec set : 'arr. 'arr spine -> depth:('arr, elt) depth -> int -> elt -> 'arr 
 
 let set (t : t) i x = set t ~depth:one i x
 
+let rec cons :
+          'arr. 'arr -> 'arr array spine -> depth:('arr, elt) depth -> 'arr array spine
+  =
+  fun (type arr) (elt : arr) (spine : arr array spine) ~(depth : (arr, elt) depth)
+    : arr array spine ->
+   match spine with
+   | Base { len; data } ->
+     if Array.length data < width
+     then Base { len = len + depth_width depth; data = elt <@ data }
+     else
+       Spine
+         { prefix = [| elt |]
+         ; prefix_len = depth_width depth
+         ; data = empty
+         ; data_len = 0
+         ; suffix = data
+         ; suffix_len = len
+         ; width = depth_width depth
+         }
+   | Spine s ->
+     if Array.length s.prefix < width
+     then
+       Spine
+         { s with
+           prefix_len = s.prefix_len + depth_width depth
+         ; prefix = elt <@ s.prefix
+         }
+     else
+       Spine
+         { s with
+           prefix_len = depth_width depth
+         ; prefix = [| elt |]
+         ; data_len = s.prefix_len + s.data_len
+         ; data = cons s.prefix s.data ~depth:(Nested { inner_size = s.width; depth })
+         }
+;;
+
+let cons elt (t : t) = cons elt t ~depth:Zero
+
 let%test_module _ =
   (module struct
     open! Core
@@ -139,14 +195,22 @@ let%test_module _ =
       fun (type arr) (arr : arr) ~(depth : (arr, elt) depth) : int ->
        match depth with
        | Zero -> 1
-       | Nested { inner_size = _; depth } ->
-         Array.sum (module Int) arr ~f:(actual_len' ~depth)
+       | Nested { inner_size; depth } ->
+         Array.sum
+           (module Int)
+           arr
+           ~f:(fun a ->
+             let len = actual_len' a ~depth in
+             [%test_result: int] len ~expect:inner_size;
+             len)
     ;;
 
     let rec actual_len : 'arr. 'arr spine -> depth:('arr, elt) depth -> int =
       fun (type arr) (spine : arr spine) ~(depth : (arr, elt) depth) : int ->
        match spine with
-       | Base arr -> actual_len' arr ~depth
+       | Base { len; data } ->
+         [%test_result: int] len ~expect:(actual_len' data ~depth);
+         len
        | Spine { prefix_len; data_len; suffix_len; width; prefix; suffix; data } ->
          [%test_result: int] prefix_len ~expect:(actual_len' prefix ~depth);
          [%test_result: int]
@@ -157,7 +221,7 @@ let%test_module _ =
     ;;
 
     let actual_len (t : t) = actual_len t ~depth:one
-    let w = 2
+    let w = width
     let arr1 ~offset = Array.init w ~f:(fun i -> offset + i)
     let arr2 ~offset = Array.init w ~f:(fun i -> arr1 ~offset:(offset + (i * w)))
     let arr3 ~offset = Array.init w ~f:(fun i -> arr2 ~offset:(offset + (i * w * w)))
@@ -178,7 +242,7 @@ let%test_module _ =
               ; width = w * w
               ; prefix = arr2 ~offset:102
               ; suffix = arr2 ~offset:114
-              ; data = Base (arr3 ~offset:106)
+              ; data = Base { len = w * w * w; data = arr3 ~offset:106 }
               }
         }
     ;;
@@ -188,17 +252,25 @@ let%test_module _ =
       [%expect
         {|
         ((prefix (1337 1))
+         (prefix_len 2)
          (data (
            (prefix (
              (102 103)
              (104 105)))
+           (prefix_len 4)
            (data (
-             ((106 107) (108 109))
-             ((110 111) (112 113))))
+             (len 8)
+             (data (
+               ((106 107) (108 109))
+               ((110 111) (112 113))))))
+           (data_len 8)
            (suffix (
              (114 115)
-             (116 117)))))
-         (suffix (18 19))) |}]
+             (116 117)))
+           (suffix_len 4)))
+         (data_len 16)
+         (suffix (18 19))
+         (suffix_len 2)) |}]
     ;;
 
     let%expect_test "t" =
@@ -206,17 +278,25 @@ let%test_module _ =
       [%expect
         {|
         ((prefix (0 1))
+         (prefix_len 2)
          (data (
            (prefix (
              (102 103)
              (104 105)))
+           (prefix_len 4)
            (data (
-             ((106 107) (108 109))
-             ((110 111) (112 113))))
+             (len 8)
+             (data (
+               ((106 107) (108 109))
+               ((110 111) (112 113))))))
+           (data_len 8)
            (suffix (
              (114 115)
-             (116 117)))))
-         (suffix (18 19))) |}]
+             (116 117)))
+           (suffix_len 4)))
+         (data_len 16)
+         (suffix (18 19))
+         (suffix_len 2)) |}]
     ;;
 
     let%expect_test "length" =
@@ -226,11 +306,15 @@ let%test_module _ =
       [%expect {| ("actual_len t" 20) |}]
     ;;
 
-    let%expect_test "get" =
+    let print_elems t =
       let l =
         List.init (length t) ~f:(fun i -> i, Or_error.try_with (fun () -> get t i))
       in
-      print_s [%sexp (l : (int * int Or_error.t) list)];
+      print_s [%sexp (l : (int * int Or_error.t) list)]
+    ;;
+
+    let%expect_test "get" =
+      print_elems t;
       [%expect
         {|
         ((0  (Ok 0))
@@ -253,6 +337,62 @@ let%test_module _ =
          (17 (Ok 117))
          (18 (Ok 18))
          (19 (Ok 19))) |}]
+    ;;
+
+    let%expect_test "cons" =
+      let t = cons (-1) t in
+      print_s [%sexp (t : t)];
+      [%expect
+        {|
+        ((prefix (-1))
+         (prefix_len 1)
+         (data (
+           (prefix ((0 1)))
+           (prefix_len 2)
+           (data (
+             (prefix ((
+               (102 103)
+               (104 105))))
+             (prefix_len 4)
+             (data ((len 0) (data ())))
+             (data_len 0)
+             (suffix (
+               ((106 107) (108 109))
+               ((110 111) (112 113))))
+             (suffix_len 8)))
+           (data_len 12)
+           (suffix (
+             (114 115)
+             (116 117)))
+           (suffix_len 4)))
+         (data_len 18)
+         (suffix (18 19))
+         (suffix_len 2)) |}];
+      print_s [%sexp ~~(actual_len t : int)];
+      [%expect {| ("actual_len t" 21) |}];
+      print_elems t;
+      [%expect{|
+        ((0  (Ok -1))
+         (1  (Ok 0))
+         (2  (Ok 1))
+         (3  (Ok 102))
+         (4  (Ok 103))
+         (5  (Ok 104))
+         (6  (Ok 105))
+         (7  (Ok 106))
+         (8  (Ok 107))
+         (9  (Ok 108))
+         (10 (Ok 109))
+         (11 (Ok 110))
+         (12 (Ok 111))
+         (13 (Ok 112))
+         (14 (Ok 113))
+         (15 (Ok 114))
+         (16 (Ok 115))
+         (17 (Ok 116))
+         (18 (Ok 117))
+         (19 (Ok 18))
+         (20 (Ok 19))) |}]
     ;;
   end)
 ;;
