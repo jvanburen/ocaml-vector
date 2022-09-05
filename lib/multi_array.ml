@@ -1,6 +1,4 @@
-type elt =
-  | Immediate
-  | Not_a_float of int * int
+type elt
 
 let width = 3
 
@@ -73,6 +71,52 @@ module O = struct
   let next = Dims.next
   let[@inline] ( .+() ) a (i, dims) = get a i ~dims
   let[@inline] ( .+()<- ) a (i, dims) x = set a i x ~dims
+end
+
+module To_array = struct
+  let rec unchecked_blit :
+            't.
+            src:'t array
+            -> src_pos:int
+            -> dst:elt array
+            -> dst_pos:int
+            -> len:int
+            -> dims:'t array dims
+            -> unit
+    =
+    fun (type t)
+        ~(src : t array)
+        ~src_pos
+        ~(dst : elt array)
+        ~dst_pos
+        ~len
+        ~(dims : t array dims)
+      : unit ->
+     if len = 0
+     then ()
+     else (
+       match dims with
+       | [ _ ] -> ArrayLabels.blit ~src ~src_pos ~dst ~dst_pos ~len
+       | width :: (_ :: _ as dims) ->
+         let dst_pos = ref dst_pos in
+         let len = ref len in
+         let i = ref (src_pos / width) in
+         let src_pos = ref (src_pos mod width) in
+         while !len > 0 do
+           let sub_len = min (width - !src_pos) !len in
+           unchecked_blit
+             ~src:src.(!i)
+             ~src_pos:!src_pos
+             ~dst
+             ~dst_pos:!dst_pos
+             ~len:sub_len
+             ~dims;
+           incr i;
+           len := !len - sub_len;
+           src_pos := 0;
+           dst_pos := !dst_pos + sub_len
+         done)
+  ;;
 end
 
 let rec actual_len : 't. 't -> dims:'t dims -> int =

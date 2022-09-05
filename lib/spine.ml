@@ -187,6 +187,63 @@ let rec fold_right :
      Multi_array.fold_right s.prefix ~init ~f ~dims
 ;;
 
+module To_array = struct
+  let[@inline] blit_helper ~src_len ~src_pos ~(dst : elt array) ~dst_pos ~len ~blit ~next =
+    let written_from_src =
+      match src_len -$ src_pos with
+      | None -> 0
+      | Some src_len ->
+        let len = min len src_len in
+        blit ~src_pos ~dst ~dst_pos ~len;
+        len
+    in
+    let src_pos = max 0 (src_pos - src_len) in
+    let dst_pos = dst_pos + written_from_src in
+    let len = len - written_from_src in
+    if len > 0 then next ~src_pos ~dst ~dst_pos ~len
+  ;;
+
+  let rec unchecked_blit :
+            'a.
+            src:'a array t
+            -> src_pos:int
+            -> dst:elt array
+            -> dst_pos:int
+            -> len:int
+            -> dims:'a array dims
+            -> unit
+    =
+    fun (type a)
+        ~(src : a array t)
+        ~src_pos
+        ~(dst : elt array)
+        ~dst_pos
+        ~len
+        ~(dims : a array dims)
+      : unit ->
+     match src with
+     | Base b ->
+       Multi_array.To_array.unchecked_blit ~src:b.data ~src_pos ~dst ~dst_pos ~len ~dims
+     | Spine s ->
+       blit_helper
+         ~src_len:s.prefix_len
+         ~src_pos
+         ~dst
+         ~dst_pos
+         ~len
+         ~blit:(Multi_array.To_array.unchecked_blit ~src:s.prefix ~dims)
+         ~next:
+           (blit_helper
+              ~src_len:s.data_len
+              ~blit:(unchecked_blit ~src:s.data ~dims:(next dims))
+              ~next:
+                (blit_helper
+                   ~src_len:s.suffix_len
+                   ~blit:(Multi_array.To_array.unchecked_blit ~src:s.suffix ~dims)
+                   ~next:(fun ~src_pos:_ ~dst:_ ~dst_pos:_ ~len:_ -> ())))
+  ;;
+end
+
 open! Base
 
 let rec actual_len : 'arr. 'arr array t -> dims:'arr array dims -> int =
