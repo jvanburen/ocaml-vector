@@ -13,6 +13,14 @@ module Dim = struct
   let next (type a) (S (i, _) as t : a array t) = S (max_width * i, t)
 end
 
+module Height = struct
+  type _ t =
+    | Z : elt t
+    | S : 'a t -> 'a array t
+
+  let one = S Z
+end
+
 type 'a dim = 'a Dim.t
 type 'a t = 'a * 'a dim
 
@@ -87,6 +95,100 @@ let rec rev : 't. 't -> dim:'t dim -> 't =
         reversed)
 ;;
 
+let rec equal : 't. (elt -> elt -> bool) -> 't -> 't -> dim:'t dim -> bool =
+  fun (type t) (equal_elt : elt -> elt -> bool) (x : t) (y : t) ~(dim : t dim) : bool ->
+   x == y
+   ||
+   match dim with
+   | Z -> equal_elt x y
+   | S (_, dim) ->
+     let len = Array.length x in
+     len = Array.length y && equal_arr equal_elt x y ~dim ~pos:0 ~len
+
+and equal_arr :
+      't.
+      (elt -> elt -> bool)
+      -> 't array
+      -> 't array
+      -> dim:'t dim
+      -> pos:int
+      -> len:int
+      -> bool
+  =
+  fun (type t)
+      (equal_elt : elt -> elt -> bool)
+      (x : t array)
+      (y : t array)
+      ~(dim : t dim)
+      ~pos
+      ~len
+    : bool ->
+   pos = len
+   || (equal equal_elt (Array.unsafe_get x pos) (Array.unsafe_get y pos) ~dim
+      && equal_arr equal_elt x y ~dim ~pos:(pos + 1) ~len)
+;;
+
+let rec compare : 't. (elt -> elt -> int) -> 't -> 't -> dim:'t dim -> int =
+  fun (type t) (compare_elt : elt -> elt -> int) (x : t) (y : t) ~(dim : t dim) : int ->
+   if x == y
+   then 0
+   else (
+     match dim with
+     | Z -> compare_elt x y
+     | S (_, dim) ->
+       let len = Array.length x in
+       let cmp = Int.compare len (Array.length y) in
+       if cmp <> 0 then cmp else compare_arr compare_elt x y ~dim ~pos:0 ~len)
+
+and compare_arr :
+      't.
+      (elt -> elt -> int)
+      -> 't array
+      -> 't array
+      -> dim:'t dim
+      -> pos:int
+      -> len:int
+      -> int
+  =
+ fun compare_elt x y ~dim ~pos ~len ->
+  if pos = len
+  then 0
+  else (
+    let cmp = compare compare_elt x.(pos) y.(pos) ~dim in
+    if cmp <> 0 then cmp else compare_arr compare_elt x y ~dim ~pos:(pos + 1) ~len)
+;;
+
+module Lexicographic = struct
+  let rec compare : 't. (elt -> elt -> int) -> 't -> 't -> dim:'t dim -> int =
+    fun (type t) (compare_elt : elt -> elt -> int) (x : t) (y : t) ~(dim : t dim) : int ->
+     if x == y
+     then 0
+     else (
+       match dim with
+       | Z -> compare_elt x y
+       | S (_, dim) ->
+         let len = min (Array.length x) (Array.length y) in
+         compare_arr compare_elt x y ~dim ~pos:0 ~len)
+
+  and compare_arr :
+        't.
+        (elt -> elt -> int)
+        -> 't array
+        -> 't array
+        -> dim:'t dim
+        -> pos:int
+        -> len:int
+        -> int
+    =
+   fun compare_elt x y ~dim ~pos ~len ->
+    if pos = len
+    then Int.compare (Array.length x) (Array.length y)
+    else (
+      let cmp = compare compare_elt x.(pos) y.(pos) ~dim in
+      if cmp <> 0 then cmp else compare_arr compare_elt x y ~dim ~pos:(pos + 1) ~len)
+ ;;
+end
+
 module To_array = struct
   let rec unchecked_blit :
             't.
@@ -152,4 +254,80 @@ let rec actual_len : 't. 't -> dim:'t dim -> int =
           let len = actual_len a ~dim in
           [%test_result: int] len ~expect:cols;
           len)
+;;
+
+open Base
+
+type 'a height = 'a Height.t
+
+type _ finger =
+  | Top : _ finger
+  | Finger :
+      { pos : int
+      ; len : int
+      ; arr : 'a array
+      ; up : 'a array array finger
+      }
+      -> 'a array finger
+
+let rec to_finger :
+          't.
+          't array -> dim:'t array height -> up:'t array array finger -> elt array finger
+  =
+  fun (type t) (t : t array) ~(dim : t array height) ~(up : t array array finger)
+    : elt array finger ->
+   match Array.length t with
+   | 0 -> next_finger up ~dim:(S dim)
+   | len ->
+     (match dim with
+      | S Z -> Finger { pos = 0; len; arr = t; up }
+      | S (S _ as down) ->
+        to_finger t.(0) ~dim:down ~up:(Finger { pos = 0; len; arr = t; up }))
+
+and next_finger : 't. 't array finger -> dim:'t array height -> elt array finger =
+  fun (type t) (f : t array finger) ~(dim : t array height) : elt array finger ->
+   match f with
+   | Top -> Top
+   | Finger ({ pos; len; arr; up } as f) ->
+     if pos + 1 = len
+     then next_finger up ~dim:(S dim)
+     else (
+       match dim with
+       | S Z -> Top
+       | S (S _ as down) ->
+         let pos = pos + 1 in
+         let next = Finger { f with pos } in
+         to_finger arr.(pos) ~dim:down ~up:next)
+;;
+
+(* let rec to_finger : 't. 't -> dim:'t height -> up:'t array finger -> elt finger = *)
+(*   fun (type t) (t : t) ~(dim : t height) ~(up : t array finger) : elt finger -> *)
+(*    match dim with *)
+(*    | Z -> Bottom (t, up) *)
+(*    | S down as dim -> *)
+(*      (match Array.length t with *)
+(*       | 0 -> next_finger up ~dim:(S dim) *)
+(*       | len -> to_finger t.(0) ~dim:down ~up:(Finger { pos = 0; len; arr = t; up })) *)
+
+(* and next_finger : 't. 't finger -> dim:'t height -> elt finger = *)
+(*   fun (type t) (f : t finger) ~(dim : t height) : elt finger -> *)
+(*    match f, dim with *)
+(*    | Top, _ -> Top *)
+(*    | Bottom (_, up), Z -> next_finger up ~dim:(S Z) *)
+(*    | Finger ({ pos; len; arr; up } as f), (S down as dim) -> *)
+(*      if pos + 1 = len *)
+(*      then next_finger up ~dim:(S dim) *)
+(*      else ( *)
+(*        let pos = pos + 1 in *)
+(*        let next = Finger { f with pos } in *)
+(*        to_finger arr.(pos) ~dim:down ~up:next) *)
+(* ;; *)
+
+let to_sequence (type t) (t : t array) ~(dim : t array height) : elt Sequence.t =
+  Sequence.unfold_step
+    ~init:(to_finger t ~dim ~up:Top)
+    ~f:(fun (finger : elt array finger) ->
+    match finger with
+    | Top -> Done
+    | Finger { pos; arr; _ } as f -> Yield (arr.(pos), next_finger f ~dim:(S Z)))
 ;;

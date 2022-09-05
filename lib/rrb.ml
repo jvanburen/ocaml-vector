@@ -14,7 +14,7 @@ let is_empty (t : _ t) = Spine.length t = 0
 let get (t : 'a t) i : 'a = of_any (Spine.get t i ~dim)
 let set (t : 'a t) i (x : 'a) = Spine.set t i (to_any x) ~dim
 let cons (x : 'a) (t : 'a t) = Spine.cons (to_any x) t ~dim
-let snoc (t : 'a t) (x : 'a) = Spine.snoc t (to_any x) ~dim
+let snoc (t : 'a t) (x : 'a) : 'a t = Spine.snoc t (to_any x) ~dim
 
 let map (type a b) (t : a t) ~(f : a -> b) : b t =
   Spine.map t ~f:(opaque_magic f : any -> any) ~dim
@@ -33,7 +33,22 @@ let fold_right (t : 'a t) ~(init : 'acc) ~(f : 'a -> 'acc -> 'acc) =
 let fold = fold_left
 let iter t ~f = fold t ~init:() ~f:(fun () x -> f x)
 let to_list t = fold_right t ~init:[] ~f:List.cons
-let to_list_rev t = fold_left t ~init:[] ~f:(fun l x -> x :: l)
+
+let to_sequence (type a) (t : a t) : a Sequence.t =
+  let len = length t in
+  Sequence.unfold_step ~init:0 ~f:(fun i ->
+    if i = len then Done else Yield (get t i, i + 1))
+;;
+
+let compare (type a) (compare_a : a -> a -> int) (x : a t) (y : a t) : int =
+  let cmp = Int.compare (length x) (length y) in
+  if cmp <> 0 then cmp else [%compare: a Sequence.t] (to_sequence x) (to_sequence y)
+;;
+
+let equal (type a) (equal_a : a -> a -> bool) (x : a t) (y : a t) : bool =
+  phys_equal x y
+  || (length x = length y && [%equal: a Sequence.t] (to_sequence x) (to_sequence y))
+;;
 
 module To_array = struct
   let unsafe_blit (type a) ~(src : a t) ~src_pos ~(dst : a array) ~dst_pos ~len =
@@ -105,7 +120,17 @@ let sexp_of_t (sexp_of_a : 'a -> Sexp.t) (t : 'a t) =
   Sexp.List (fold_right t ~init:[] ~f:(fun a acc -> sexp_of_a a :: acc))
 ;;
 
-let of_list l = List.fold_right l ~init:empty ~f:cons
+let of_list l = List.fold l ~init:empty ~f:snoc
+let of_sequence s = Sequence.fold s ~init:empty ~f:snoc
+
+let of_array a =
+  (* TODO: this could be much better *)
+  Array.fold a ~init:empty ~f:snoc
+;;
+
+let t_of_sexp (type a) (a_of_sexp : Sexp.t -> a) (sexp : Sexp.t) : a t =
+  of_array ([%of_sexp: a array] sexp)
+;;
 
 let%test_module _ =
   (module struct

@@ -1,5 +1,6 @@
 type elt = Multi_array.elt
 type 'a dim = 'a Multi_array.Dim.t
+type 'a height = 'a Multi_array.Height.t
 
 let max_width = Multi_array.Dim.max_width
 let cols = Multi_array.Dim.cols
