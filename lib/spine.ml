@@ -1,87 +1,6 @@
-type elt = int
+type elt = Multi_array.elt
 
-let width = 3
-
-module Multi_array = struct
-  module Dims = struct
-    type _ t =
-      | [] : elt t
-      | ( :: ) : int * 'a t -> 'a array t
-
-    let one = [ 1 ]
-    let dim1 (type a) (i :: _ : a array t) : int = i
-    let next (type a) (dim1 :: _ as t : a array t) = (width * dim1) :: t
-  end
-
-  type 'a dims = 'a Dims.t
-  type 'a t = 'a * 'a dims
-
-  let dim1 = Dims.dim1
-
-  let rec get : 'arr. 'arr dims -> 'arr -> int -> elt =
-    fun (type arr) (dims : arr dims) (arr : arr) (i : int) : elt ->
-     match dims with
-     | [] -> if i = 0 then arr else invalid_arg "index out of bounds"
-     | width :: dims -> get dims arr.(i / width) (i mod width)
-  ;;
-
-  let rec set : 'arr. 'arr dims -> 'arr -> int -> 'elt -> 'arr =
-    fun (type arr) (dims : arr dims) (arr : arr) (i : int) (elt : elt) : arr ->
-     match dims with
-     | [] -> if i = 0 then elt else invalid_arg "index out of bounds"
-     | width :: dims ->
-       let c = Array.copy arr in
-       c.(i / width) <- set dims arr.(i / width) (i mod width) elt;
-       c
-  ;;
-
-  let rec fold_left :
-            'arr 'acc. 'arr dims -> ('acc -> elt -> 'acc) -> 'acc -> 'arr -> 'acc
-    =
-    fun (type arr acc) (dims : arr dims) (f : acc -> elt -> acc) (init : acc) (arr : arr)
-      : acc ->
-     match dims with
-     | [] -> init
-     | _ :: dims -> Array.fold_left (fold_left dims f) init arr
-  ;;
-
-  let rec fold_right :
-            'arr 'acc. 'arr dims -> (elt -> 'acc -> 'acc) -> 'arr -> 'acc -> 'acc
-    =
-    fun (type arr acc) (dims : arr dims) (f : elt -> acc -> acc) (arr : arr) (init : acc)
-      : acc ->
-     match dims with
-     | [] -> init
-     | _ :: dims -> Array.fold_right (fold_right dims f) arr init
-  ;;
-
-  let[@inline] fold_left dims a ~init ~f = fold_left dims f init a
-  let[@inline] fold_right dims a ~init ~f = fold_right dims f a init
-
-  let rec actual_len : 'arr. 'arr dims -> 'arr -> int =
-    let open Base in
-    fun (type arr) (dims' : arr dims) (arr : arr) : int ->
-      match dims' with
-      | [] -> 1
-      | inner_width :: dims ->
-        Array.sum
-          (module Int)
-          arr
-          ~f:(fun a ->
-            let len = actual_len dims a in
-            [%test_result: int] len ~expect:inner_width;
-            len)
-  ;;
-
-  module O = struct
-    type 'a dims = 'a Dims.t
-
-    let dim1 = Dims.dim1
-    let next = Dims.next
-    let[@inline] ( .+() ) a (i, dims) = get dims a i
-    let[@inline] ( .+()<- ) a (i, dims) x = set dims a i x
-  end
-end
+let width = Multi_array.width
 
 open Multi_array.O
 
@@ -146,8 +65,8 @@ let length (type a) (t : a t) =
   | Spine s -> s.prefix_len + s.data_len + s.suffix_len
 ;;
 
-let rec get : 'arr. 'arr array t -> int -> dims:'arr array dims -> elt =
-  fun (type arr) (t : arr array t) (i : int) ~(dims : arr array dims) : elt ->
+let rec get : 'a. 'a array t -> int -> dims:'a array dims -> elt =
+  fun (type a) (t : a array t) (i : int) ~(dims : a array dims) : elt ->
    match t with
    | Base b -> b.data.+(i, dims)
    | Spine s ->
@@ -159,9 +78,8 @@ let rec get : 'arr. 'arr array t -> int -> dims:'arr array dims -> elt =
          | Some i -> s.suffix.+(i, dims)))
 ;;
 
-let rec set : 'arr. 'arr array t -> int -> elt -> dims:'arr array dims -> 'arr array t =
-  fun (type arr) (t : arr array t) (i : int) (elt : elt) ~(dims : arr array dims)
-    : arr array t ->
+let rec set : 'a. 'a array t -> int -> elt -> dims:'a array dims -> 'a array t =
+  fun (type a) (t : a array t) (i : int) (elt : elt) ~(dims : a array dims) : a array t ->
    match t with
    | Base b -> Base { b with data = b.data.+(i, dims) <- elt }
    | Spine s ->
@@ -173,8 +91,8 @@ let rec set : 'arr. 'arr array t -> int -> elt -> dims:'arr array dims -> 'arr a
          | Some i -> Spine { s with suffix = s.suffix.+(i, dims) <- elt }))
 ;;
 
-let rec cons : 'arr. 'arr -> 'arr array t -> dims:'arr array dims -> 'arr array t =
-  fun (type arr) (elt : arr) (t : arr array t) ~(dims : arr array dims) : arr array t ->
+let rec cons : 'a. 'a -> 'a array t -> dims:'a array dims -> 'a array t =
+  fun (type a) (elt : a) (t : a array t) ~(dims : a array dims) : a array t ->
    match t with
    | Base { len; data } ->
      if Array.length data < width
@@ -203,44 +121,70 @@ let rec cons : 'arr. 'arr -> 'arr array t -> dims:'arr array dims -> 'arr array 
          }
 ;;
 
+let rec snoc : 'a. 'a array t -> 'a -> dims:'a array dims -> 'a array t =
+  fun (type a) (t : a array t) (elt : a) ~(dims : a array dims) : a array t ->
+   match t with
+   | Base { len; data } ->
+     if Array.length data < width
+     then Base { len = len + dim1 dims; data = data @> elt }
+     else
+       (* TODO: should this really be in suffix? why not data? *)
+       Spine
+         { prefix = data
+         ; prefix_len = len
+         ; data = empty
+         ; data_len = 0
+         ; suffix = [| elt |]
+         ; suffix_len = dim1 dims
+         }
+   | Spine s ->
+     if Array.length s.suffix < width
+     then Spine { s with suffix_len = s.suffix_len + dim1 dims; suffix = s.suffix @> elt }
+     else
+       Spine
+         { prefix_len = s.prefix_len
+         ; prefix = s.prefix
+         ; data_len = s.suffix_len + s.data_len
+         ; data = snoc s.data s.suffix ~dims:(next dims)
+         ; suffix_len = dim1 dims
+         ; suffix = [| elt |]
+         }
+;;
+
 let rec fold_left :
-          'arr 'acc.
-          'arr array dims -> 'arr array t -> init:'acc -> f:('acc -> elt -> 'acc) -> 'acc
+          'a 'acc.
+          'a array t -> init:'acc -> f:('acc -> elt -> 'acc) -> dims:'a array dims -> 'acc
   =
-  fun (type arr acc)
-      (dims : arr array dims)
-      (t : arr array t)
+  fun (type a acc)
+      (t : a array t)
       ~(init : acc)
       ~(f : acc -> elt -> acc)
+      ~(dims : a array dims)
     : acc ->
    match t with
-   | Base b -> Multi_array.fold_left dims b.data ~init ~f
+   | Base b -> Multi_array.fold_left b.data ~init ~f ~dims
    | Spine s ->
-     let init = Multi_array.fold_left dims s.prefix ~init ~f in
-     let init = fold_left (next dims) s.data ~init ~f in
-     Multi_array.fold_left dims s.suffix ~init ~f
+     let init = Multi_array.fold_left s.prefix ~init ~f ~dims in
+     let init = fold_left s.data ~init ~f ~dims:(next dims) in
+     Multi_array.fold_left s.suffix ~init ~f ~dims
 ;;
 
 let rec fold_right :
-          'arr 'acc.
-          'arr array t
-          -> init:'acc
-          -> f:(elt -> 'acc -> 'acc)
-          -> dims:'arr array dims
-          -> 'acc
+          'a 'acc.
+          'a array t -> init:'acc -> f:(elt -> 'acc -> 'acc) -> dims:'a array dims -> 'acc
   =
-  fun (type arr acc)
-      (t : arr array t)
+  fun (type a acc)
+      (t : a array t)
       ~(init : acc)
       ~(f : elt -> acc -> acc)
-      ~(dims : arr array dims)
+      ~(dims : a array dims)
     : acc ->
    match t with
-   | Base b -> Multi_array.fold_right dims b.data ~init ~f
+   | Base b -> Multi_array.fold_right b.data ~init ~f ~dims
    | Spine s ->
-     let init = Multi_array.fold_right dims s.suffix ~init ~f in
+     let init = Multi_array.fold_right s.suffix ~init ~f ~dims in
      let init = fold_right s.data ~init ~f ~dims:(next dims) in
-     Multi_array.fold_right dims s.prefix ~init ~f
+     Multi_array.fold_right s.prefix ~init ~f ~dims
 ;;
 
 open! Base
@@ -249,12 +193,12 @@ let rec actual_len : 'arr. 'arr array t -> dims:'arr array dims -> int =
   fun (type arr) (t : arr array t) ~(dims : arr array dims) : int ->
    match t with
    | Base { len; data } ->
-     [%test_result: int] len ~expect:(Multi_array.actual_len dims data);
+     [%test_result: int] len ~expect:(Multi_array.actual_len data ~dims);
      len
    | Spine { prefix_len; data_len; suffix_len; prefix; suffix; data } ->
-     [%test_result: int] prefix_len ~expect:(Multi_array.actual_len dims prefix);
+     [%test_result: int] prefix_len ~expect:(Multi_array.actual_len prefix ~dims);
      [%test_result: int] data_len ~expect:(actual_len data ~dims:(next dims));
-     [%test_result: int] suffix_len ~expect:(Multi_array.actual_len dims suffix);
+     [%test_result: int] suffix_len ~expect:(Multi_array.actual_len suffix ~dims);
      let len = prefix_len + data_len + suffix_len in
      assert (len > 0);
      len

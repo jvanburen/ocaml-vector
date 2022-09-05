@@ -1,36 +1,56 @@
 open Base
 
-type elt = int [@@deriving sexp_of]
-type t = elt array Spine.t [@@deriving sexp_of]
+type any = Multi_array.elt
+type +'a t = any array Spine.t
 
-let one : elt array Spine.Multi_array.Dims.t = [ 1 ]
+external of_any : any -> 'a = "%opaque"
+external to_any : 'a -> any = "%opaque"
+external opaque_magic : 'a -> 'b = "%opaque"
+
+let one : any array Multi_array.Dims.t = [ 1 ]
 let empty = Spine.empty
-let length (t : t) = Spine.length t
-let get (t : t) i = Spine.get t i ~dims:one
-let set (t : t) i x = Spine.set t i x ~dims:one
-let cons elt (t : t) = Spine.cons elt t ~dims:one
-let fold_left t ~init ~f = Spine.fold_left t ~init ~f ~dims:one
-let fold_right t ~init ~f = Spine.fold_right t ~init ~f ~dims:one
-let fold = fold_left
-let to_list t = fold_right t ~init:[] ~f:List.cons
-let invariant (t : t) = Spine.invariant t ~dims:one
+let length (t : _ t) = Spine.length t
+let get (t : 'a t) i : 'a = of_any (Spine.get t i ~dims:one)
+let set (t : 'a t) i (x : 'a) = Spine.set t i (to_any x) ~dims:one
+let cons (x : 'a) (t : 'a t) = Spine.cons (to_any x) t ~dims:one
+let snoc (t : 'a t) (x : 'a) = Spine.snoc t (to_any x) ~dims:one
 
-let of_list l =
-  (* TODO: not the greatest implementation *)
-  List.fold_right l ~init:empty ~f:cons
+let fold_left (t : 'a t) ~(init : 'acc) ~(f : 'acc -> 'a -> 'acc) =
+  Spine.fold_left t ~init ~f:(opaque_magic f : 'acc -> any -> 'acc) ~dims:one
 ;;
+
+let fold_right (t : 'a t) ~(init : 'acc) ~(f : 'a -> 'acc -> 'acc) =
+  Spine.fold_right t ~init ~f:(opaque_magic f : any -> 'acc -> 'acc) ~dims:one
+;;
+
+let fold = fold_left
+let iter t ~f = fold t ~init:() ~f:(fun () x -> f x)
+let to_list t = fold_right t ~init:[] ~f:List.cons
+let invariant (t : _ t) = Spine.invariant t ~dims:one
+
+let sexp_of_t (sexp_of_a : 'a -> Sexp.t) (t : 'a t) =
+  Sexp.List (fold_right t ~init:[] ~f:(fun a acc -> sexp_of_a a :: acc))
+;;
+
+let of_list l = List.fold_right l ~init:empty ~f:cons
 
 let%test_module _ =
   (module struct
     open! Core
     open Expect_test_helpers_core
 
+    type int_elt = any
+
+    let sexp_of_int_elt any = [%sexp (of_any any : int)]
+
+    type debug = int_elt array Spine.t [@@deriving sexp_of]
+
     let%expect_test "of_list" =
-      let (_ : t) =
+      let (_ : int t) =
         List.fold_right [ 0; 1; 2; 3; 4; 5 ] ~init:empty ~f:(fun x t ->
           let t = cons x t in
           print_s [%sexp (Or_error.try_with (fun () -> invariant t) : unit Or_error.t)];
-          print_s [%sexp (t : t)];
+          print_s [%sexp (t : debug)];
           t)
       in
       [%expect
@@ -77,7 +97,7 @@ let%test_module _ =
     ;;
 
     let%expect_test "t" =
-      print_s [%sexp (t : t)];
+      print_s [%sexp (t : debug)];
       [%expect
         {|
         ((prefix (1 2))
@@ -103,11 +123,16 @@ let%test_module _ =
 
     let%expect_test "to_list" =
       print_s [%sexp (to_list t : int list)];
-      [%expect {| () |}]
+      [%expect {| (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) |}]
+    ;;
+
+    let%expect_test "sexp_of" =
+      print_s [%sexp (t : int t)];
+      [%expect {| (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) |}]
     ;;
 
     let%expect_test "set" =
-      print_s [%sexp (set t 0 1337 : t)];
+      print_s [%sexp (set t 0 1337 : debug)];
       [%expect
         {|
         ((prefix (1337 2))
@@ -166,7 +191,7 @@ let%test_module _ =
 
     let%expect_test "cons" =
       let t = cons 0 t in
-      print_s [%sexp (t : t)];
+      print_s [%sexp (t : debug)];
       [%expect
         {|
         ((prefix (0 1 2))
