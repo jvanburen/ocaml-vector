@@ -1,8 +1,11 @@
 type elt = Multi_array.elt
+type 'a dim = 'a Multi_array.Dim.t
 
-let width = Multi_array.width
-
-open Multi_array.O
+let max_width = Multi_array.Dim.max_width
+let cols = Multi_array.Dim.cols
+let next = Multi_array.Dim.next
+let[@inline] ( .+() ) a (i, dim) = Multi_array.get a i ~dim
+let[@inline] ( .+()<- ) a (i, dim) x = Multi_array.set a i x ~dim
 
 let ( @> ) src x =
   let len = Array.length src in
@@ -48,7 +51,6 @@ include struct
        [%sexp
          { prefix : arr
          ; prefix_len : int
-         ; width : int
          ; data : arr array t
          ; data_len : int
          ; suffix : arr
@@ -65,68 +67,68 @@ let length (type a) (t : a t) =
   | Spine s -> s.prefix_len + s.data_len + s.suffix_len
 ;;
 
-let rec get : 'a. 'a array t -> int -> dims:'a array dims -> elt =
-  fun (type a) (t : a array t) (i : int) ~(dims : a array dims) : elt ->
+let rec get : 'a. 'a array t -> int -> dim:'a array dim -> elt =
+  fun (type a) (t : a array t) (i : int) ~(dim : a array dim) : elt ->
    match t with
-   | Base b -> b.data.+(i, dims)
+   | Base b -> b.data.+(i, dim)
    | Spine s ->
      (match i -$ s.prefix_len with
-      | None -> s.prefix.+(i, dims)
+      | None -> s.prefix.+(i, dim)
       | Some i ->
         (match i -$ s.data_len with
-         | None -> get s.data i ~dims:(next dims)
-         | Some i -> s.suffix.+(i, dims)))
+         | None -> get s.data i ~dim:(next dim)
+         | Some i -> s.suffix.+(i, dim)))
 ;;
 
-let rec set : 'a. 'a array t -> int -> elt -> dims:'a array dims -> 'a array t =
-  fun (type a) (t : a array t) (i : int) (elt : elt) ~(dims : a array dims) : a array t ->
+let rec set : 'a. 'a array t -> int -> elt -> dim:'a array dim -> 'a array t =
+  fun (type a) (t : a array t) (i : int) (elt : elt) ~(dim : a array dim) : a array t ->
    match t with
-   | Base b -> Base { b with data = b.data.+(i, dims) <- elt }
+   | Base b -> Base { b with data = b.data.+(i, dim) <- elt }
    | Spine s ->
      (match i -$ s.prefix_len with
-      | None -> Spine { s with prefix = s.prefix.+(i, dims) <- elt }
+      | None -> Spine { s with prefix = s.prefix.+(i, dim) <- elt }
       | Some i ->
         (match i -$ s.data_len with
-         | None -> Spine { s with data = set s.data i elt ~dims:(next dims) }
-         | Some i -> Spine { s with suffix = s.suffix.+(i, dims) <- elt }))
+         | None -> Spine { s with data = set s.data i elt ~dim:(next dim) }
+         | Some i -> Spine { s with suffix = s.suffix.+(i, dim) <- elt }))
 ;;
 
-let rec cons : 'a. 'a -> 'a array t -> dims:'a array dims -> 'a array t =
-  fun (type a) (elt : a) (t : a array t) ~(dims : a array dims) : a array t ->
+let rec cons : 'a. 'a -> 'a array t -> dim:'a array dim -> 'a array t =
+  fun (type a) (elt : a) (t : a array t) ~(dim : a array dim) : a array t ->
    match t with
    | Base { len; data } ->
-     if Array.length data < width
-     then Base { len = len + dim1 dims; data = elt <@ data }
+     if Array.length data < max_width
+     then Base { len = len + cols dim; data = elt <@ data }
      else
        (* TODO: should this really be in suffix? why not data? *)
        Spine
          { prefix = [| elt |]
-         ; prefix_len = dim1 dims
+         ; prefix_len = cols dim
          ; data = empty
          ; data_len = 0
          ; suffix = data
          ; suffix_len = len
          }
    | Spine s ->
-     if Array.length s.prefix < width
-     then Spine { s with prefix_len = s.prefix_len + dim1 dims; prefix = elt <@ s.prefix }
+     if Array.length s.prefix < max_width
+     then Spine { s with prefix_len = s.prefix_len + cols dim; prefix = elt <@ s.prefix }
      else
        Spine
-         { prefix_len = dim1 dims
+         { prefix_len = cols dim
          ; prefix = [| elt |]
          ; data_len = s.prefix_len + s.data_len
-         ; data = cons s.prefix s.data ~dims:(next dims)
+         ; data = cons s.prefix s.data ~dim:(next dim)
          ; suffix_len = s.suffix_len
          ; suffix = s.suffix
          }
 ;;
 
-let rec snoc : 'a. 'a array t -> 'a -> dims:'a array dims -> 'a array t =
-  fun (type a) (t : a array t) (elt : a) ~(dims : a array dims) : a array t ->
+let rec snoc : 'a. 'a array t -> 'a -> dim:'a array dim -> 'a array t =
+  fun (type a) (t : a array t) (elt : a) ~(dim : a array dim) : a array t ->
    match t with
    | Base { len; data } ->
-     if Array.length data < width
-     then Base { len = len + dim1 dims; data = data @> elt }
+     if Array.length data < max_width
+     then Base { len = len + cols dim; data = data @> elt }
      else
        (* TODO: should this really be in suffix? why not data? *)
        Spine
@@ -135,56 +137,83 @@ let rec snoc : 'a. 'a array t -> 'a -> dims:'a array dims -> 'a array t =
          ; data = empty
          ; data_len = 0
          ; suffix = [| elt |]
-         ; suffix_len = dim1 dims
+         ; suffix_len = cols dim
          }
    | Spine s ->
-     if Array.length s.suffix < width
-     then Spine { s with suffix_len = s.suffix_len + dim1 dims; suffix = s.suffix @> elt }
+     if Array.length s.suffix < max_width
+     then Spine { s with suffix_len = s.suffix_len + cols dim; suffix = s.suffix @> elt }
      else
        Spine
          { prefix_len = s.prefix_len
          ; prefix = s.prefix
          ; data_len = s.suffix_len + s.data_len
-         ; data = snoc s.data s.suffix ~dims:(next dims)
-         ; suffix_len = dim1 dims
+         ; data = snoc s.data s.suffix ~dim:(next dim)
+         ; suffix_len = cols dim
          ; suffix = [| elt |]
          }
 ;;
 
+let rec map : 'a. 'a array t -> f:(elt -> elt) -> dim:'a array dim -> 'a array t =
+  fun (type a) (t : a array t) ~(f : elt -> elt) ~(dim : a array dim) : a array t ->
+   match t with
+   | Base b ->
+     if b.len = 0 then t else Base { b with data = Multi_array.map b.data ~f ~dim }
+   | Spine s ->
+     let prefix = Multi_array.map s.prefix ~f ~dim in
+     let data = map s.data ~f ~dim:(next dim) in
+     let suffix = Multi_array.map s.suffix ~f ~dim in
+     Spine { s with prefix; data; suffix }
+;;
+
+let rec rev : 'a. 'a array t -> dim:'a array dim -> 'a array t =
+  fun (type a) (t : a array t) ~(dim : a array dim) : a array t ->
+   match t with
+   | Base b -> if b.len = 0 then t else Base { b with data = Multi_array.rev b.data ~dim }
+   | Spine { prefix_len; prefix; data_len; data; suffix_len; suffix } ->
+     Spine
+       { prefix_len = suffix_len
+       ; prefix = Multi_array.rev suffix ~dim
+       ; data_len
+       ; data = rev data ~dim:(next dim)
+       ; suffix_len = prefix_len
+       ; suffix = Multi_array.rev prefix ~dim
+       }
+;;
+
 let rec fold_left :
           'a 'acc.
-          'a array t -> init:'acc -> f:('acc -> elt -> 'acc) -> dims:'a array dims -> 'acc
+          'a array t -> init:'acc -> f:('acc -> elt -> 'acc) -> dim:'a array dim -> 'acc
   =
   fun (type a acc)
       (t : a array t)
       ~(init : acc)
       ~(f : acc -> elt -> acc)
-      ~(dims : a array dims)
+      ~(dim : a array dim)
     : acc ->
    match t with
-   | Base b -> Multi_array.fold_left b.data ~init ~f ~dims
+   | Base b -> Multi_array.fold_left b.data ~init ~f ~dim
    | Spine s ->
-     let init = Multi_array.fold_left s.prefix ~init ~f ~dims in
-     let init = fold_left s.data ~init ~f ~dims:(next dims) in
-     Multi_array.fold_left s.suffix ~init ~f ~dims
+     let init = Multi_array.fold_left s.prefix ~init ~f ~dim in
+     let init = fold_left s.data ~init ~f ~dim:(next dim) in
+     Multi_array.fold_left s.suffix ~init ~f ~dim
 ;;
 
 let rec fold_right :
           'a 'acc.
-          'a array t -> init:'acc -> f:(elt -> 'acc -> 'acc) -> dims:'a array dims -> 'acc
+          'a array t -> init:'acc -> f:(elt -> 'acc -> 'acc) -> dim:'a array dim -> 'acc
   =
   fun (type a acc)
       (t : a array t)
       ~(init : acc)
       ~(f : elt -> acc -> acc)
-      ~(dims : a array dims)
+      ~(dim : a array dim)
     : acc ->
    match t with
-   | Base b -> Multi_array.fold_right b.data ~init ~f ~dims
+   | Base b -> Multi_array.fold_right b.data ~init ~f ~dim
    | Spine s ->
-     let init = Multi_array.fold_right s.suffix ~init ~f ~dims in
-     let init = fold_right s.data ~init ~f ~dims:(next dims) in
-     Multi_array.fold_right s.prefix ~init ~f ~dims
+     let init = Multi_array.fold_right s.suffix ~init ~f ~dim in
+     let init = fold_right s.data ~init ~f ~dim:(next dim) in
+     Multi_array.fold_right s.prefix ~init ~f ~dim
 ;;
 
 module To_array = struct
@@ -210,7 +239,7 @@ module To_array = struct
             -> dst:elt array
             -> dst_pos:int
             -> len:int
-            -> dims:'a array dims
+            -> dim:'a array dim
             -> unit
     =
     fun (type a)
@@ -219,11 +248,11 @@ module To_array = struct
         ~(dst : elt array)
         ~dst_pos
         ~len
-        ~(dims : a array dims)
+        ~(dim : a array dim)
       : unit ->
      match src with
      | Base b ->
-       Multi_array.To_array.unchecked_blit ~src:b.data ~src_pos ~dst ~dst_pos ~len ~dims
+       Multi_array.To_array.unchecked_blit ~src:b.data ~src_pos ~dst ~dst_pos ~len ~dim
      | Spine s ->
        blit_helper
          ~src_len:s.prefix_len
@@ -231,37 +260,37 @@ module To_array = struct
          ~dst
          ~dst_pos
          ~len
-         ~blit:(Multi_array.To_array.unchecked_blit ~src:s.prefix ~dims)
+         ~blit:(Multi_array.To_array.unchecked_blit ~src:s.prefix ~dim)
          ~next:
            (blit_helper
               ~src_len:s.data_len
-              ~blit:(unchecked_blit ~src:s.data ~dims:(next dims))
+              ~blit:(unchecked_blit ~src:s.data ~dim:(next dim))
               ~next:
                 (blit_helper
                    ~src_len:s.suffix_len
-                   ~blit:(Multi_array.To_array.unchecked_blit ~src:s.suffix ~dims)
+                   ~blit:(Multi_array.To_array.unchecked_blit ~src:s.suffix ~dim)
                    ~next:(fun ~src_pos:_ ~dst:_ ~dst_pos:_ ~len:_ -> ())))
   ;;
 end
 
 open! Base
 
-let rec actual_len : 'arr. 'arr array t -> dims:'arr array dims -> int =
-  fun (type arr) (t : arr array t) ~(dims : arr array dims) : int ->
+let rec actual_len : 'arr. 'arr array t -> dim:'arr array dim -> int =
+  fun (type arr) (t : arr array t) ~(dim : arr array dim) : int ->
    match t with
    | Base { len; data } ->
-     [%test_result: int] len ~expect:(Multi_array.actual_len data ~dims);
+     [%test_result: int] len ~expect:(Multi_array.actual_len data ~dim);
      len
    | Spine { prefix_len; data_len; suffix_len; prefix; suffix; data } ->
-     [%test_result: int] prefix_len ~expect:(Multi_array.actual_len prefix ~dims);
-     [%test_result: int] data_len ~expect:(actual_len data ~dims:(next dims));
-     [%test_result: int] suffix_len ~expect:(Multi_array.actual_len suffix ~dims);
+     [%test_result: int] prefix_len ~expect:(Multi_array.actual_len prefix ~dim);
+     [%test_result: int] data_len ~expect:(actual_len data ~dim:(next dim));
+     [%test_result: int] suffix_len ~expect:(Multi_array.actual_len suffix ~dim);
      let len = prefix_len + data_len + suffix_len in
      assert (len > 0);
      len
 ;;
 
-let invariant t ~dims =
-  let expect = actual_len t ~dims in
+let invariant t ~dim =
+  let expect = actual_len t ~dim in
   [%test_result: int] (length t) ~expect
 ;;

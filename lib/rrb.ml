@@ -7,21 +7,27 @@ external of_any : any -> 'a = "%opaque"
 external to_any : 'a -> any = "%opaque"
 external opaque_magic : 'a -> 'b = "%opaque"
 
-let dims : any array Multi_array.Dims.t = [ 1 ]
+let dim : any array Multi_array.Dim.t = Multi_array.Dim.one
 let empty = Spine.empty
 let length (t : _ t) = Spine.length t
 let is_empty (t : _ t) = Spine.length t = 0
-let get (t : 'a t) i : 'a = of_any (Spine.get t i ~dims)
-let set (t : 'a t) i (x : 'a) = Spine.set t i (to_any x) ~dims
-let cons (x : 'a) (t : 'a t) = Spine.cons (to_any x) t ~dims
-let snoc (t : 'a t) (x : 'a) = Spine.snoc t (to_any x) ~dims
+let get (t : 'a t) i : 'a = of_any (Spine.get t i ~dim)
+let set (t : 'a t) i (x : 'a) = Spine.set t i (to_any x) ~dim
+let cons (x : 'a) (t : 'a t) = Spine.cons (to_any x) t ~dim
+let snoc (t : 'a t) (x : 'a) = Spine.snoc t (to_any x) ~dim
+
+let map (type a b) (t : a t) ~(f : a -> b) : b t =
+  Spine.map t ~f:(opaque_magic f : any -> any) ~dim
+;;
+
+let rev (type a) (t : a t) : a t = Spine.rev t ~dim
 
 let fold_left (t : 'a t) ~(init : 'acc) ~(f : 'acc -> 'a -> 'acc) =
-  Spine.fold_left t ~init ~f:(opaque_magic f : 'acc -> any -> 'acc) ~dims
+  Spine.fold_left t ~init ~f:(opaque_magic f : 'acc -> any -> 'acc) ~dim
 ;;
 
 let fold_right (t : 'a t) ~(init : 'acc) ~(f : 'a -> 'acc -> 'acc) =
-  Spine.fold_right t ~init ~f:(opaque_magic f : any -> 'acc -> 'acc) ~dims
+  Spine.fold_right t ~init ~f:(opaque_magic f : any -> 'acc -> 'acc) ~dim
 ;;
 
 let fold = fold_left
@@ -37,7 +43,7 @@ module To_array = struct
       ~dst:(opaque_magic dst : any array)
       ~dst_pos
       ~len
-      ~dims
+      ~dim
   ;;
 
   let blit (type a) ~(src : a t) ~src_pos ~(dst : a array) ~dst_pos ~len =
@@ -93,7 +99,7 @@ let init =
     go n ~f empty 0
 ;;
 
-let invariant (t : _ t) = Spine.invariant t ~dims
+let invariant (t : _ t) = Spine.invariant t ~dim
 
 let sexp_of_t (sexp_of_a : 'a -> Sexp.t) (t : 'a t) =
   Sexp.List (fold_right t ~init:[] ~f:(fun a acc -> sexp_of_a a :: acc))
@@ -142,7 +148,6 @@ let%test_module _ =
         (Ok ())
         ((prefix (2))
          (prefix_len 1)
-         (width      3)
          (data ((len 0) (data ())))
          (data_len 0)
          (suffix (3 4 5))
@@ -150,7 +155,6 @@ let%test_module _ =
         (Ok ())
         ((prefix (1 2))
          (prefix_len 2)
-         (width      3)
          (data ((len 0) (data ())))
          (data_len 0)
          (suffix (3 4 5))
@@ -158,7 +162,6 @@ let%test_module _ =
         (Ok ())
         ((prefix (0 1 2))
          (prefix_len 3)
-         (width      3)
          (data ((len 0) (data ())))
          (data_len 0)
          (suffix (3 4 5))
@@ -175,14 +178,12 @@ let%test_module _ =
         {|
         ((prefix (1 2 3))
          (prefix_len 3)
-         (width      3)
          (data (
            (prefix (
              (4  5  6)
              (7  8  9)
              (10 11 12)))
            (prefix_len 9)
-           (width      3)
            (data ((len 0) (data ())))
            (data_len 0)
            (suffix (
@@ -210,14 +211,12 @@ let%test_module _ =
         {|
         ((prefix (1337 2 3))
          (prefix_len 3)
-         (width      3)
          (data (
            (prefix (
              (4  5  6)
              (7  8  9)
              (10 11 12)))
            (prefix_len 9)
-           (width      3)
            (data ((len 0) (data ())))
            (data_len 0)
            (suffix (
@@ -290,11 +289,9 @@ let%test_module _ =
         {|
         ((prefix (0))
          (prefix_len 1)
-         (width      3)
          (data (
            (prefix ((1 2 3)))
            (prefix_len 3)
-           (width      3)
            (data (
              (len 9)
              (data ((
@@ -322,14 +319,12 @@ let%test_module _ =
         {|
         ((prefix (1 2 3))
          (prefix_len 3)
-         (width      3)
          (data (
            (prefix (
              (4  5  6)
              (7  8  9)
              (10 11 12)))
            (prefix_len 9)
-           (width      3)
            (data ((len 0) (data ())))
            (data_len 0)
            (suffix (
@@ -347,10 +342,20 @@ let%test_module _ =
 
     let%expect_test "to_array" =
       let t = ref empty in
-      [%test_result: int array] (to_array !t) ~expect:(Array.of_list (to_list !t));
+      [%test_result: int array] (to_array !t) ~expect:[||];
       for i = 0 to 30 do
         t := snoc !t i;
         [%test_result: int array] (to_array !t) ~expect:(Array.of_list (to_list !t))
+      done;
+      [%expect]
+    ;;
+
+    let%expect_test "rev" =
+      let t = ref empty in
+      [%test_result: int array] (to_array (rev !t)) ~expect:(Array.rev (to_array !t));
+      for i = 0 to 30 do
+        t := snoc !t i;
+        [%test_result: int array] (to_array (rev !t)) ~expect:(Array.rev (to_array !t))
       done;
       [%expect]
     ;;
