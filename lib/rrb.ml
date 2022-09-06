@@ -3,18 +3,33 @@ open Base
 type any = Multi_array.elt
 type +'a t = any array Spine.t
 
+let dim : any array Multi_array.Dim.t = Multi_array.Dim.one
+
 external of_any : any -> 'a = "%opaque"
 external to_any : 'a -> any = "%opaque"
 external opaque_magic : 'a -> 'b = "%opaque"
 
-let dim : any array Multi_array.Dim.t = Multi_array.Dim.one
+include Indexed_container.Make (struct
+  type nonrec 'a t = 'a t
+
+  let length = `Custom Spine.length
+
+  let fold (t : 'a t) ~(init : 'acc) ~(f : 'acc -> 'a -> 'acc) =
+    Spine.fold_left t ~init ~f:(opaque_magic f : 'acc -> any -> 'acc) ~dim
+  ;;
+
+  let iter = `Define_using_fold
+  let foldi = `Define_using_fold
+  let iteri = `Define_using_fold
+end)
+
 let empty = Spine.empty
-let length (t : _ t) = Spine.length t
 let is_empty (t : _ t) = Spine.length t = 0
 let get (t : 'a t) i : 'a = of_any (Spine.get t i ~dim)
 let set (t : 'a t) i (x : 'a) = Spine.set t i (to_any x) ~dim
 let cons (x : 'a) (t : 'a t) = Spine.cons (to_any x) t ~dim
 let snoc (t : 'a t) (x : 'a) : 'a t = Spine.snoc t (to_any x) ~dim
+let singleton x = cons x empty
 
 let map (type a b) (t : a t) ~(f : a -> b) : b t =
   Spine.map t ~f:(opaque_magic f : any -> any) ~dim
@@ -30,8 +45,6 @@ let fold_right (t : 'a t) ~(init : 'acc) ~(f : 'a -> 'acc -> 'acc) =
   Spine.fold_right t ~init ~f:(opaque_magic f : any -> 'acc -> 'acc) ~dim
 ;;
 
-let fold = fold_left
-let iter t ~f = fold t ~init:() ~f:(fun () x -> f x)
 let to_list t = fold_right t ~init:[] ~f:List.cons
 
 let to_sequence (type a) (t : a t) : a Sequence.t =
@@ -49,6 +62,38 @@ let equal (type a) (equal_a : a -> a -> bool) (x : a t) (y : a t) : bool =
   phys_equal x y
   || (length x = length y && [%equal: a Sequence.t] (to_sequence x) (to_sequence y))
 ;;
+
+let append (type a) (x : a t) (y : a t) : a t =
+  (* TODO: better implementation*)
+  if length x < length y
+  then fold_right x ~init:y ~f:cons
+  else fold_left y ~init:x ~f:snoc
+;;
+
+let init =
+  (* TODO: better implementation *)
+  let rec go n ~f t i = if i = n then t else go n ~f (snoc t (f i)) (i + 1) in
+  fun n ~f ->
+    if n < 0 then invalid_arg "Vec.init";
+    go n ~f empty 0
+;;
+
+let sub (type a) (t : a t) ~pos ~len : a t =
+  Ordered_collection_common.check_pos_len_exn ~pos ~len ~total_length:(length t);
+  (* TODO: better implementation *)
+  init len ~f:(fun i -> get t (pos + i))
+;;
+
+let subo ?(pos = 0) ?len t =
+  match len with
+  | Some len -> sub t ~pos ~len
+  | None -> sub t ~pos ~len:(length t - pos)
+;;
+
+(* TODO: better implementations *)
+let take t n = subo t ~len:(Int.clamp_exn n ~min:0 ~max:(length t))
+let drop t n = subo t ~pos:(Int.clamp_exn n ~min:0 ~max:(length t))
+let split_n t n = take t n, drop t n
 
 module To_array = struct
   let unsafe_blit (type a) ~(src : a t) ~src_pos ~(dst : a array) ~dst_pos ~len =
@@ -88,13 +133,9 @@ module To_array = struct
   ;;
 
   let subo ?(pos = 0) ?len src =
-    sub
-      src
-      ~pos
-      ~len:
-        (match len with
-         | Some i -> i
-         | None -> length src - pos)
+    match len with
+    | Some len -> sub src ~pos ~len
+    | None -> sub src ~pos ~len:(length src - pos)
   ;;
 end
 
@@ -105,13 +146,6 @@ let to_array t =
     let dst = Array.create (get t 0) ~len in
     To_array.blit ~src:t ~src_pos:1 ~dst ~dst_pos:1 ~len:(len - 1);
     dst
-;;
-
-let init =
-  let rec go n ~f t i = if i = n then t else go n ~f (snoc t (f i)) (i + 1) in
-  fun n ~f ->
-    if n < 0 then invalid_arg "Vec.init";
-    go n ~f empty 0
 ;;
 
 let invariant (t : _ t) = Spine.invariant t ~dim
@@ -131,6 +165,45 @@ let of_array a =
 let t_of_sexp (type a) (a_of_sexp : Sexp.t -> a) (sexp : Sexp.t) : a t =
   of_array ([%of_sexp: a array] sexp)
 ;;
+
+let sort (type a) (t : a t) ~(compare : a -> a -> int) : a t =
+  let a = to_array t in
+  Array.sort a ~compare;
+  of_array a
+;;
+
+let stable_sort (type a) (t : a t) ~(compare : a -> a -> int) : a t =
+  let a = to_array t in
+  Array.stable_sort a ~compare;
+  of_array a
+;;
+
+let dedup_and_sort (type a) (t : a t) ~(compare : a -> a -> int) : a t =
+  let a = to_array t in
+  Array.sort a ~compare;
+  Array.fold_right a ~init:empty ~f:(fun x t ->
+    if is_empty t then singleton x else if compare x (get t 0) = 0 then t else cons x t)
+;;
+
+let hd_exn t = get t 0
+let hd t = if is_empty t then None else hd_exn t
+let last_exn t = get t (length t - 1)
+let last t = if is_empty t then None else last_exn t
+
+let concat_map t ~f =
+  (* TODO: improve implementation *)
+  fold t ~init:empty ~f:(fun t x -> append t (f x))
+;;
+
+let concat t = concat_map t ~f:Fn.id
+
+include Monad.Make (struct
+  type nonrec 'a t = 'a t
+
+  let return = singleton
+  let map = `Custom map
+  let bind = concat_map
+end)
 
 let%test_module _ =
   (module struct
@@ -383,6 +456,14 @@ let%test_module _ =
         [%test_result: int array] (to_array (rev !t)) ~expect:(Array.rev (to_array !t))
       done;
       [%expect]
+    ;;
+
+    let%expect_test "dedup_and_sort" =
+      print_s
+        [%sexp
+          (dedup_and_sort (of_list [ 1; 5; 2; 3; 2; 2; 7; 8; 4; 9; 6; 0; 2 ]) ~compare
+            : int t)];
+      [%expect {| (0 1 2 3 4 5 6 7 8 9) |}]
     ;;
   end)
 ;;

@@ -295,3 +295,109 @@ let invariant t ~dim =
   let expect = actual_len t ~dim in
   [%test_result: int] (length t) ~expect
 ;;
+
+(* TODO: test / use this... *)
+module Builder = struct
+  type 'a spine = 'a t
+
+  type 'a node =
+    | Nothing
+    | Node of
+        { mutable len : int
+        ; mutable storage : 'a array
+        ; mutable next : 'a array node
+        }
+
+  type t =
+    { mutable pos : int
+    ; mutable len : int
+    ; mutable node : elt node
+    }
+
+  let create () : t = { pos = 0; len = 0; node = Nothing }
+
+  let rec add : 'a. 'a node -> 'a -> 'a node =
+    fun (type a) (node : a node) (x : a) : a node ->
+     match node with
+     | Nothing ->
+       Node { len = 1; storage = Array.create x ~len:max_width; next = Nothing }
+     | Node n ->
+       if n.len < max_width
+       then (
+         n.storage.(n.len) <- x;
+         n.len <- n.len + 1)
+       else (
+         let prev = n.storage in
+         n.len <- 0;
+         n.storage <- Array.create x ~len:max_width;
+         match add n.next prev with
+         | Nothing -> ()
+         | Node _ as node -> n.next <- node);
+       Nothing
+  ;;
+
+  let rec add_arr : 'a. 'a node -> 'a array -> pos:int -> len:int -> 'a node =
+    fun (type a) (node : a node) (a : a array) ~pos ~len : a node ->
+     if len = 0
+     then node
+     else (
+       match node with
+       | Nothing ->
+         add_arr
+           (Node
+              { len = 1; storage = Array.create a.(pos) ~len:max_width; next = Nothing })
+           a
+           ~pos:(pos + 1)
+           ~len:(len - 1)
+       | Node n ->
+         let added = min len (max_width - n.len) in
+         Array.blit ~src:a ~src_pos:pos ~dst:n.storage ~dst_pos:n.len ~len:added;
+         n.len <- n.len + added;
+         let pos = pos + added
+         and len = len - added in
+         if len = 0
+         then node
+         else (
+           assert (len > 0);
+           (match add n.next n.storage with
+            | Nothing -> ()
+            | Node _ as node -> n.next <- node);
+           n.len <- 1;
+           n.storage <- Array.create a.(pos) ~len:max_width;
+           add_arr node a ~pos:(pos + 1) ~len:(len - 1)))
+  ;;
+
+  let add t elt =
+    t.len <- t.len + 1;
+    match add t.node elt with
+    | Nothing -> ()
+    | Node _ as node -> t.node <- node
+  ;;
+
+  let add_arr t a ~pos ~len =
+    Ordered_collection_common.check_pos_len_exn ~pos ~len ~total_length:(Array.length a);
+    t.len <- t.len + len;
+    t.node <- add_arr t.node a ~pos ~len
+  ;;
+
+  let[@inline] trunc a ~len = if len = max_width then a else Array.sub a ~pos:0 ~len
+
+  let rec to_spine : 'a. 'a node -> dim:'a array dim -> 'a array spine =
+    fun (type a) (node : a node) ~(dim : a array dim) : a array spine ->
+     match node with
+     | Nothing -> empty
+     | Node { len; storage; next = Nothing } -> Base { len; data = trunc storage ~len }
+     | Node { len; storage; next = Node _ as node } ->
+       let data = to_spine node ~dim:(next dim) in
+       Spine
+         { prefix_len = 0
+         ; prefix = [||]
+         ; suffix = trunc storage ~len
+         ; suffix_len = len
+         ; data
+         ; data_len = length data
+         }
+  ;;
+
+  (* let to_spine t = *)
+end
