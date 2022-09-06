@@ -300,78 +300,153 @@ let invariant t ~dim =
 module Builder = struct
   type 'a spine = 'a t
 
-  type 'a node =
-    | Nothing
-    | Node of
+  type _ node =
+    | Empty : _ node
+    | Base :
         { mutable len : int
-        ; mutable storage : 'a array
-        ; mutable next : 'a array node
+        ; mutable data : 'data array
         }
+        -> 'data array node
+    | Spine :
+        { mutable prefix_len : int
+        ; mutable prefix : 'data
+        ; mutable data : 'data array node
+        ; mutable suffix_len : int
+        ; mutable suffix : 'data
+        }
+        -> 'data node
 
   type t =
-    { mutable pos : int
-    ; mutable len : int
-    ; mutable node : elt node
+    { mutable len : int
+    ; mutable node : elt array node
     }
 
-  let create () : t = { pos = 0; len = 0; node = Nothing }
+  let create () : t = { len = 0; node = Empty }
+  let[@inline] trunc a ~len = if len = Array.length a then a else Array.sub a ~pos:0 ~len
 
-  let rec add : 'a. 'a node -> 'a -> 'a node =
-    fun (type a) (node : a node) (x : a) : a node ->
-     match node with
-     | Nothing ->
-       Node { len = 1; storage = Array.create x ~len:max_width; next = Nothing }
-     | Node n ->
-       if n.len < max_width
-       then (
-         n.storage.(n.len) <- x;
-         n.len <- n.len + 1)
-       else (
-         let prev = n.storage in
-         n.len <- 0;
-         n.storage <- Array.create x ~len:max_width;
-         match add n.next prev with
-         | Nothing -> ()
-         | Node _ as node -> n.next <- node);
-       Nothing
+  let[@inline] extend_nonempty src ~len =
+    let src_len = Array.length src in
+    if len = src_len
+    then src
+    else (
+      let dst = Array.create src.(0) ~len in
+      Array.blit ~src ~src_pos:1 ~dst ~dst_pos:1 ~len:(src_len - 1);
+      dst)
   ;;
 
-  let rec add_arr : 'a. 'a node -> 'a array -> pos:int -> len:int -> 'a node =
-    fun (type a) (node : a node) (a : a array) ~pos ~len : a node ->
+  let[@inline] set_maybe_extend src i x ~max_len =
+    if i >= max_len
+    then None
+    else
+      Some
+        (let src_len = Array.length src in
+         if i < src_len
+         then (
+           src.(i) <- x;
+           src)
+         else (
+           let dst = Array.create x ~len:max_len in
+           Array.blito ~src ~dst ();
+           dst))
+  ;;
+
+  let rec add : 'a. 'a array node -> 'a -> 'a array node =
+    fun (type a) (node : a array node) (elt : a) : a array node ->
+     match node with
+     | Empty -> Base { len = 1; data = Array.create elt ~len:(max_width - 2) }
+     | Base b ->
+       (match set_maybe_extend b.data b.len elt ~max_len:(max_width - 2) with
+        | Some data ->
+          b.data <- data;
+          b.len <- b.len + 1;
+          node
+        | None ->
+          Spine
+            { prefix = b.data
+            ; prefix_len = b.len
+            ; data = Empty
+            ; suffix = Array.create elt ~len:max_width
+            ; suffix_len = 1
+            })
+     | Spine s ->
+       (match set_maybe_extend s.suffix s.suffix_len elt ~max_len:max_width with
+        | Some suffix ->
+          s.suffix <- suffix;
+          s.suffix_len <- s.suffix_len + 1;
+          node
+        | None ->
+          s.data <- add s.data s.suffix;
+          s.suffix <- Array.create elt ~len:max_width;
+          s.suffix_len <- 1;
+          node)
+  ;;
+
+  let rec add_arr : 'a. 'a array node -> 'a array -> pos:int -> len:int -> 'a array node =
+    fun (type a) (node : a array node) (a : a array) ~pos ~len : a array node ->
      if len = 0
      then node
      else (
        match node with
-       | Nothing ->
-         add_arr
-           (Node
-              { len = 1; storage = Array.create a.(pos) ~len:max_width; next = Nothing })
-           a
-           ~pos:(pos + 1)
-           ~len:(len - 1)
-       | Node n ->
-         let added = min len (max_width - n.len) in
-         Array.blit ~src:a ~src_pos:pos ~dst:n.storage ~dst_pos:n.len ~len:added;
-         n.len <- n.len + added;
+       | Empty ->
+         let node = Base { len = 1; data = Array.create a.(pos) ~len:(max_width - 2) } in
+         add_arr node a ~pos:(pos + 1) ~len:(len - 1)
+       | Base b ->
+         let added = min len (Array.length b.data - b.len) in
+         Array.blit ~src:a ~src_pos:pos ~dst:b.data ~dst_pos:b.len ~len:added;
+         b.len <- b.len + added;
+         add_arr node a ~pos:(pos + added) ~len:(len - added)
+       | Spine s ->
+         let added = min len (Array.length s.suffix - s.suffix_len) in
+         Array.blit ~src:a ~src_pos:pos ~dst:s.suffix ~dst_pos:s.suffix_len ~len:added;
+         s.suffix_len <- s.suffix_len + added;
          let pos = pos + added
          and len = len - added in
          if len = 0
          then node
          else (
-           assert (len > 0);
-           (match add n.next n.storage with
-            | Nothing -> ()
-            | Node _ as node -> n.next <- node);
-           n.len <- 1;
-           n.storage <- Array.create a.(pos) ~len:max_width;
+           s.data <- add s.data s.suffix;
+           s.suffix_len <- 1;
+           s.suffix <- Array.create a.(pos) ~len:max_width;
            add_arr node a ~pos:(pos + 1) ~len:(len - 1)))
+  ;;
+
+  let rec to_spine : 'a. 'a array node -> dim:'a array dim -> 'a array spine =
+    fun (type a) (node : a array node) ~(dim : a array dim) : a array spine ->
+     match node with
+     | Empty -> empty
+     | Base { len; data } -> Base { len = len * cols dim; data = trunc data ~len }
+     | Spine { prefix_len; prefix; data; suffix_len; suffix } ->
+       let data = to_spine data ~dim:(next dim) in
+       Spine
+         { prefix_len = prefix_len * cols dim
+         ; prefix = trunc prefix ~len:prefix_len
+         ; suffix_len = suffix_len * cols dim
+         ; suffix = trunc suffix ~len:suffix_len
+         ; data
+         ; data_len = length data
+         }
+  ;;
+
+  let rec of_spine : 'a. 'a array spine -> dim:'a array dim -> 'a array node =
+    fun (type a) (node : a array spine) ~(dim : a array dim) : a array node ->
+     match node with
+     | Base b ->
+       (match Array.length b.data with
+        | 0 -> Empty
+        | len -> Base { len; data = extend_nonempty b.data ~len:(max_width - 2) })
+     | Spine { prefix; data; suffix; _ } ->
+       Spine
+         { prefix_len = Array.length prefix
+         ; prefix
+         ; data = of_spine data ~dim:(next dim)
+         ; suffix_len = Array.length suffix
+         ; suffix
+         }
   ;;
 
   let add t elt =
     t.len <- t.len + 1;
-    match add t.node elt with
-    | Nothing -> ()
-    | Node _ as node -> t.node <- node
+    t.node <- add t.node elt
   ;;
 
   let add_arr t a ~pos ~len =
@@ -380,24 +455,9 @@ module Builder = struct
     t.node <- add_arr t.node a ~pos ~len
   ;;
 
-  let[@inline] trunc a ~len = if len = max_width then a else Array.sub a ~pos:0 ~len
-
-  let rec to_spine : 'a. 'a node -> dim:'a array dim -> 'a array spine =
-    fun (type a) (node : a node) ~(dim : a array dim) : a array spine ->
-     match node with
-     | Nothing -> empty
-     | Node { len; storage; next = Nothing } -> Base { len; data = trunc storage ~len }
-     | Node { len; storage; next = Node _ as node } ->
-       let data = to_spine node ~dim:(next dim) in
-       Spine
-         { prefix_len = 0
-         ; prefix = [||]
-         ; suffix = trunc storage ~len
-         ; suffix_len = len
-         ; data
-         ; data_len = length data
-         }
+  let to_spine t ~dim =
+    let spine = to_spine t.node ~dim in
+    [%test_result: int] (length spine) ~expect:t.len;
+    spine
   ;;
-
-  (* let to_spine t = *)
 end
