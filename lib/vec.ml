@@ -98,6 +98,16 @@ let init =
     go n ~f Spine.Builder.empty 0
 ;;
 
+let filter_map (type a b) (t : a t) ~(f : a -> b option) : b t =
+  fold t ~init:Spine.Builder.empty ~f:(fun b x ->
+    match f (of_any x) with
+    | None -> b
+    | Some x -> Spine.Builder.add b (to_any x))
+  |> Spine.Builder.to_spine ~dim
+;;
+
+let filter t ~f = filter_map t ~f:(fun x -> Option.some_if (f x) x)
+
 let sub (type a) (t : a t) ~pos ~len : a t =
   Ordered_collection_common.check_pos_len_exn ~pos ~len ~total_length:(length t);
   (* TODO: better implementation *)

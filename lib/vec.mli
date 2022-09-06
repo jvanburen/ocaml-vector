@@ -19,6 +19,8 @@ end
 
 val empty : _ t
 val singleton : 'a -> 'a t
+val filter : 'a t -> f:('a -> bool) -> 'a t
+val filter_map : 'a t -> f:('a -> 'b option) -> 'b t
 val init : int -> f:(int -> 'a) -> 'a t
 val get : 'a t -> int -> 'a
 val set : 'a t -> int -> 'a -> 'a t
