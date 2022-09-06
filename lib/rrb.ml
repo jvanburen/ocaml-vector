@@ -59,9 +59,17 @@ let to_sequence (type a) (t : a t) : a Sequence.t =
     if i = len then Done else Yield (get t i, i + 1))
 ;;
 
+module Lexicographic = struct
+  type nonrec 'a t = 'a t
+
+  let compare (type a) (compare_a : a -> a -> int) (x : a t) (y : a t) : int =
+    [%compare: a Sequence.t] (to_sequence x) (to_sequence y)
+  ;;
+end
+
 let compare (type a) (compare_a : a -> a -> int) (x : a t) (y : a t) : int =
   let cmp = Int.compare (length x) (length y) in
-  if cmp <> 0 then cmp else [%compare: a Sequence.t] (to_sequence x) (to_sequence y)
+  if cmp <> 0 then cmp else [%compare: a Lexicographic.t] x y
 ;;
 
 let equal (type a) (equal_a : a -> a -> bool) (x : a t) (y : a t) : bool =

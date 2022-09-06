@@ -1,18 +1,10 @@
 open Base
 
-(* TODO:
-- list view
-- bin_prot
-- sort
-- dedup and sort
-- shortlex compare
-- lexicographic compare
-- equal
-- to_sequence
-- [Indexed_container.S1]
-*)
-
 type +'a t [@@deriving equal, compare, sexp]
+
+module Lexicographic : sig
+  type nonrec 'a t = 'a t [@@deriving compare]
+end
 
 include Indexed_container.S1 with type 'a t := 'a t
 include Monad.S with type 'a t := 'a t
