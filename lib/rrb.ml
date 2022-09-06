@@ -1,5 +1,11 @@
 open Base
 
+module View = struct
+  type ('a, 'b) t =
+    | []
+    | ( :: ) of 'a * 'b
+end
+
 type any = Multi_array.elt
 type +'a t = any array Spine.t
 
@@ -189,6 +195,16 @@ let hd_exn t = get t 0
 let hd t = if is_empty t then None else hd_exn t
 let last_exn t = get t (length t - 1)
 let last t = if is_empty t then None else last_exn t
+
+let view (t : 'a t) : ('a, 'a t) View.t =
+  if is_empty t then [] else get t 0 :: subo t ~pos:1
+;;
+
+let weiv (t : 'a t) : ('a t, 'a) View.t =
+  match length t with
+  | 0 -> []
+  | len -> sub t ~pos:0 ~len:(len - 1) :: get t (len - 1)
+;;
 
 let concat_map t ~f =
   (* TODO: improve implementation *)

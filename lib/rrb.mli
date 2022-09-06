@@ -18,17 +18,25 @@ include Indexed_container.S1 with type 'a t := 'a t
 include Monad.S with type 'a t := 'a t
 module To_array : Blit.S1_distinct with type 'a src := 'a t and type 'a dst := 'a array
 
+module View : sig
+  type ('a, 'b) t =
+    | []
+    | ( :: ) of 'a * 'b
+end
+
 val empty : _ t
 val singleton : 'a -> 'a t
 val init : int -> f:(int -> 'a) -> 'a t
 val get : 'a t -> int -> 'a
 val set : 'a t -> int -> 'a -> 'a t
+val cons : 'a -> 'a t -> 'a t
+val snoc : 'a t -> 'a -> 'a t
+val view : 'a t -> ('a, 'a t) View.t
+val weiv : 'a t -> ('a t, 'a) View.t
 val hd : 'a t -> 'a option
 val hd_exn : 'a t -> 'a
 val last : 'a t -> 'a option
 val last_exn : 'a t -> 'a
-val cons : 'a -> 'a t -> 'a t
-val snoc : 'a t -> 'a -> 'a t
 val append : 'a t -> 'a t -> 'a t
 val concat : 'a t t -> 'a t
 val concat_map : 'a t -> f:('a -> 'b t) -> 'b t
