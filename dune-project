@@ -1,26 +1,20 @@
 (lang dune 3.4)
 
-(name rrb)
+(name vec)
 
-(generate_opam_files true)
+(generate_opam_files false)
 
 (source
- (github username/reponame))
+ (github jvanburen/ocaml-vector))
 
-(authors "Author Name")
+(authors "Jacob Van Buren")
 
-(maintainers "Maintainer Name")
-
-(license LICENSE)
-
-(documentation https://url/to/documentation)
+(maintainers "Jacob Van Buren")
 
 (package
- (name rrb)
- (synopsis "A short synopsis")
- (description "A longer description")
+ (name vec)
+ (synopsis "immutable vectors")
+ (description "Immutable vectors based on radix-balanced finger trees")
  (depends ocaml dune)
- (tags
-  (topics "to describe" your project)))
+ (tags (wow cool jvb)))
 
-; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project

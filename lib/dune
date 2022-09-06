@@ -1,5 +1,5 @@
 (library
-  (name rrb)
+  (name vec)
   (libraries core expect_test_helpers_core)
   (inline_tests)
   (preprocess (pps ppx_jane))

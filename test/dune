@@ -1,4 +1,4 @@
 (test
- (name rrb)
- (libraries rrb)
+ (name vec)
+ (libraries vec)
 )
