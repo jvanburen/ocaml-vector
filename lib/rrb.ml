@@ -253,8 +253,8 @@ let%test_module _ =
 
     let%expect_test "of_list" =
       let (_ : int t) =
-        List.fold_right [ 0; 1; 2; 3; 4; 5 ] ~init:empty ~f:(fun x t ->
-          let t = cons x t in
+        List.fold [ 0; 1; 2; 3; 4; 5 ] ~init:empty ~f:(fun t x ->
+          let t = snoc t x in
           print_s [%sexp (Or_error.try_with (fun () -> check t) : unit Or_error.t)];
           print_s [%sexp (t : debug)];
           t)
@@ -262,32 +262,42 @@ let%test_module _ =
       [%expect
         {|
         (Ok ())
-        ((len 1) (data (5)))
+        ((len 1) (data (0)))
         (Ok ())
-        ((len 2) (data (4 5)))
-        (Ok ())
-        ((len 3) (data (3 4 5)))
-        (Ok ())
-        ((prefix (2))
+        ((prefix (0))
          (prefix_len 1)
          (data ((len 0) (data ())))
          (data_len 0)
-         (suffix (3 4 5))
-         (suffix_len 3))
+         (suffix (1))
+         (suffix_len 1))
         (Ok ())
-        ((prefix (1 2))
-         (prefix_len 2)
+        ((prefix (0))
+         (prefix_len 1)
          (data ((len 0) (data ())))
          (data_len 0)
-         (suffix (3 4 5))
-         (suffix_len 3))
+         (suffix (1 2))
+         (suffix_len 2))
         (Ok ())
-        ((prefix (0 1 2))
-         (prefix_len 3)
+        ((prefix (0))
+         (prefix_len 1)
          (data ((len 0) (data ())))
          (data_len 0)
-         (suffix (3 4 5))
-         (suffix_len 3)) |}]
+         (suffix (1 2 3))
+         (suffix_len 3))
+        (Ok ())
+        ((prefix (0))
+         (prefix_len 1)
+         (data ((len 3) (data ((1 2 3)))))
+         (data_len 3)
+         (suffix (4))
+         (suffix_len 1))
+        (Ok ())
+        ((prefix (0))
+         (prefix_len 1)
+         (data ((len 3) (data ((1 2 3)))))
+         (data_len 3)
+         (suffix (4 5))
+         (suffix_len 2)) |}]
     ;;
 
     let t = init 20 ~f:succ
@@ -296,25 +306,26 @@ let%test_module _ =
       check t;
       [%test_result: int] (length t) ~expect:20;
       print_s [%sexp (t : debug)];
-      [%expect
-        {|
-        ((prefix (1 2 3))
-         (prefix_len 3)
+      [%expect{|
+        ((prefix (1))
+         (prefix_len 1)
          (data (
-           (prefix (
-             (4  5  6)
-             (7  8  9)
-             (10 11 12)))
-           (prefix_len 9)
-           (data ((len 0) (data ())))
-           (data_len 0)
+           (prefix ((2 3 4)))
+           (prefix_len 3)
+           (data (
+             (len 9)
+             (data ((
+               (5  6  7)
+               (8  9  10)
+               (11 12 13))))))
+           (data_len 9)
            (suffix (
-             (13 14 15)
-             (16 17 18)))
+             (14 15 16)
+             (17 18 19)))
            (suffix_len 6)))
-         (data_len 15)
-         (suffix (19 20))
-         (suffix_len 2)) |}]
+         (data_len 18)
+         (suffix (20))
+         (suffix_len 1)) |}]
     ;;
 
     let%expect_test "to_list" =
@@ -331,23 +342,25 @@ let%test_module _ =
       print_s [%sexp (set t 0 1337 : debug)];
       [%expect
         {|
-        ((prefix (1337 2 3))
-         (prefix_len 3)
+        ((prefix (1337))
+         (prefix_len 1)
          (data (
-           (prefix (
-             (4  5  6)
-             (7  8  9)
-             (10 11 12)))
-           (prefix_len 9)
-           (data ((len 0) (data ())))
-           (data_len 0)
+           (prefix ((2 3 4)))
+           (prefix_len 3)
+           (data (
+             (len 9)
+             (data ((
+               (5  6  7)
+               (8  9  10)
+               (11 12 13))))))
+           (data_len 9)
            (suffix (
-             (13 14 15)
-             (16 17 18)))
+             (14 15 16)
+             (17 18 19)))
            (suffix_len 6)))
-         (data_len 15)
-         (suffix (19 20))
-         (suffix_len 2)) |}]
+         (data_len 18)
+         (suffix (20))
+         (suffix_len 1)) |}]
     ;;
 
     (* TODO: test [set] *)
@@ -409,29 +422,29 @@ let%test_module _ =
       print_s [%sexp (t : debug)];
       [%expect
         {|
-        ((prefix (0))
-         (prefix_len 1)
+        ((prefix (0 1))
+         (prefix_len 2)
          (data (
-           (prefix ((1 2 3)))
+           (prefix ((2 3 4)))
            (prefix_len 3)
            (data (
              (len 9)
              (data ((
-               (4  5  6)
-               (7  8  9)
-               (10 11 12))))))
+               (5  6  7)
+               (8  9  10)
+               (11 12 13))))))
            (data_len 9)
            (suffix (
-             (13 14 15)
-             (16 17 18)))
+             (14 15 16)
+             (17 18 19)))
            (suffix_len 6)))
          (data_len 18)
-         (suffix (19 20))
-         (suffix_len 2)) |}];
+         (suffix (20))
+         (suffix_len 1)) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
-      [%expect {| (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) |}]
+      [%expect{| (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) |}]
     ;;
 
     let%expect_test "snoc" =
@@ -439,27 +452,29 @@ let%test_module _ =
       print_s [%sexp (t : debug)];
       [%expect
         {|
-        ((prefix (1 2 3))
-         (prefix_len 3)
+        ((prefix (1))
+         (prefix_len 1)
          (data (
-           (prefix (
-             (4  5  6)
-             (7  8  9)
-             (10 11 12)))
-           (prefix_len 9)
-           (data ((len 0) (data ())))
-           (data_len 0)
+           (prefix ((2 3 4)))
+           (prefix_len 3)
+           (data (
+             (len 9)
+             (data ((
+               (5  6  7)
+               (8  9  10)
+               (11 12 13))))))
+           (data_len 9)
            (suffix (
-             (13 14 15)
-             (16 17 18)))
+             (14 15 16)
+             (17 18 19)))
            (suffix_len 6)))
-         (data_len 15)
-         (suffix (19 20 21))
-         (suffix_len 3)) |}];
+         (data_len 18)
+         (suffix (20 21))
+         (suffix_len 2)) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
-      [%expect {| (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21) |}]
+      [%expect{| (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21) |}]
     ;;
 
     let%expect_test "to_array" =
@@ -469,7 +484,7 @@ let%test_module _ =
         t := snoc !t i;
         [%test_result: int array] (to_array !t) ~expect:(Array.of_list (to_list !t))
       done;
-      [%expect]
+      [%expect{||}]
     ;;
 
     let%expect_test "rev" =
@@ -479,7 +494,7 @@ let%test_module _ =
         t := snoc !t i;
         [%test_result: int array] (to_array (rev !t)) ~expect:(Array.rev (to_array !t))
       done;
-      [%expect]
+      [%expect{||}]
     ;;
 
     let%expect_test "dedup_and_sort" =
@@ -487,7 +502,7 @@ let%test_module _ =
         [%sexp
           (dedup_and_sort (of_list [ 1; 5; 2; 3; 2; 2; 7; 8; 4; 9; 6; 0; 2 ]) ~compare
             : int t)];
-      [%expect {| (0 1 2 3 4 5 6 7 8 9) |}]
+      [%expect{| (0 1 2 3 4 5 6 7 8 9) |}]
     ;;
   end)
 ;;

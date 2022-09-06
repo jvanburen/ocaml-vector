@@ -42,7 +42,7 @@ type _ t =
       -> 'data t
 
 include struct
-  open Core
+  open Base
 
   let rec sexp_of_t : 'arr. ('arr -> Sexp.t) -> 'arr t -> Sexp.t =
     fun (type arr) (sexp_of_arr : arr -> Sexp.t) (t : arr t) : Sexp.t ->
@@ -98,7 +98,7 @@ let rec cons : 'a. 'a -> 'a array t -> dim:'a array dim -> 'a array t =
   fun (type a) (elt : a) (t : a array t) ~(dim : a array dim) : a array t ->
    match t with
    | Base { len; data } ->
-     if Array.length data < max_width
+     if Array.length data < max_width - 2
      then Base { len = len + cols dim; data = elt <@ data }
      else
        (* TODO: should this really be in suffix? why not data? *)
@@ -128,7 +128,7 @@ let rec snoc : 'a. 'a array t -> 'a -> dim:'a array dim -> 'a array t =
   fun (type a) (t : a array t) (elt : a) ~(dim : a array dim) : a array t ->
    match t with
    | Base { len; data } ->
-     if Array.length data < max_width
+     if Array.length data < max_width - 2
      then Base { len = len + cols dim; data = data @> elt }
      else
        (* TODO: should this really be in suffix? why not data? *)
