@@ -50,7 +50,7 @@ let rec fold_left :
   =
   fun (type t acc) (t : t) ~(init : acc) ~(f : acc -> elt -> acc) ~(dim : t dim) : acc ->
    match dim with
-   | Z -> init
+   | Z -> f init t
    | S (_, Z) -> ArrayLabels.fold_left t ~init ~f
    | S (_, dim) ->
      let init = ref init in
@@ -60,36 +60,12 @@ let rec fold_left :
      !init
 ;;
 
-let rec fold_left' :
-          't 'acc.
-          't array
-          -> init:'acc
-          -> f:('acc -> elt array -> 'acc)
-          -> dim:'t array dim
-          -> 'acc
-  =
-  fun (type t acc)
-      (t : t array)
-      ~(init : acc)
-      ~(f : acc -> elt array -> acc)
-      ~(dim : t array dim)
-    : acc ->
-   match dim with
-   | S (_, Z) -> f init t
-   | S (_, (S _ as dim)) ->
-     let init = ref init in
-     for i = 0 to Array.length t - 1 do
-       init := fold_left' (Array.unsafe_get t i) ~init:!init ~f ~dim
-     done;
-     !init
-;;
-
 let rec fold_right :
           't 'acc. 't -> init:'acc -> f:(elt -> 'acc -> 'acc) -> dim:'t dim -> 'acc
   =
   fun (type t acc) (t : t) ~(init : acc) ~(f : elt -> acc -> acc) ~(dim : t dim) : acc ->
    match dim with
-   | Z -> init
+   | Z -> f t init
    | S (_, Z) -> ArrayLabels.fold_right t ~init ~f
    | S (_, dim) ->
      let init = ref init in
