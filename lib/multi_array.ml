@@ -1,4 +1,6 @@
-type elt
+type elt = private
+  | Immediate
+  | Not_a_float of int
 
 (* TODO: These could all be specialized for single-dimensional arrays *)
 
@@ -54,6 +56,30 @@ let rec fold_left :
      let init = ref init in
      for i = 0 to Array.length t - 1 do
        init := fold_left (Array.unsafe_get t i) ~init:!init ~f ~dim
+     done;
+     !init
+;;
+
+let rec fold_left' :
+          't 'acc.
+          't array
+          -> init:'acc
+          -> f:('acc -> elt array -> 'acc)
+          -> dim:'t array dim
+          -> 'acc
+  =
+  fun (type t acc)
+      (t : t array)
+      ~(init : acc)
+      ~(f : acc -> elt array -> acc)
+      ~(dim : t array dim)
+    : acc ->
+   match dim with
+   | S (_, Z) -> f init t
+   | S (_, (S _ as dim)) ->
+     let init = ref init in
+     for i = 0 to Array.length t - 1 do
+       init := fold_left' (Array.unsafe_get t i) ~init:!init ~f ~dim
      done;
      !init
 ;;
@@ -299,29 +325,6 @@ and next_finger : 't. 't array finger -> dim:'t array height -> elt array finger
          let next = Finger { f with pos } in
          to_finger arr.(pos) ~dim:down ~up:next)
 ;;
-
-(* let rec to_finger : 't. 't -> dim:'t height -> up:'t array finger -> elt finger = *)
-(*   fun (type t) (t : t) ~(dim : t height) ~(up : t array finger) : elt finger -> *)
-(*    match dim with *)
-(*    | Z -> Bottom (t, up) *)
-(*    | S down as dim -> *)
-(*      (match Array.length t with *)
-(*       | 0 -> next_finger up ~dim:(S dim) *)
-(*       | len -> to_finger t.(0) ~dim:down ~up:(Finger { pos = 0; len; arr = t; up })) *)
-
-(* and next_finger : 't. 't finger -> dim:'t height -> elt finger = *)
-(*   fun (type t) (f : t finger) ~(dim : t height) : elt finger -> *)
-(*    match f, dim with *)
-(*    | Top, _ -> Top *)
-(*    | Bottom (_, up), Z -> next_finger up ~dim:(S Z) *)
-(*    | Finger ({ pos; len; arr; up } as f), (S down as dim) -> *)
-(*      if pos + 1 = len *)
-(*      then next_finger up ~dim:(S dim) *)
-(*      else ( *)
-(*        let pos = pos + 1 in *)
-(*        let next = Finger { f with pos } in *)
-(*        to_finger arr.(pos) ~dim:down ~up:next) *)
-(* ;; *)
 
 let to_sequence (type t) (t : t array) ~(dim : t array height) : elt Sequence.t =
   Sequence.unfold_step

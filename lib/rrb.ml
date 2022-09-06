@@ -1,4 +1,4 @@
-open Base
+open! Core
 
 module View = struct
   type ('a, 'b) t =
@@ -78,18 +78,24 @@ let equal (type a) (equal_a : a -> a -> bool) (x : a t) (y : a t) : bool =
 ;;
 
 let append (type a) (x : a t) (y : a t) : a t =
-  (* TODO: better implementation*)
-  if length x < length y
-  then fold_right x ~init:y ~f:cons
-  else fold_left y ~init:x ~f:snoc
+  if is_empty x
+  then y
+  else if is_empty y
+  then x
+  else (
+    let b = Spine.Builder.of_spine x ~dim in
+    Spine.Builder.add_spine b y ~dim |> Spine.Builder.to_spine ~dim)
 ;;
 
 let init =
-  (* TODO: better implementation *)
-  let rec go n ~f t i = if i = n then t else go n ~f (snoc t (f i)) (i + 1) in
+  let rec go n ~f b i =
+    if i = n
+    then Spine.Builder.to_spine b ~dim
+    else go n ~f (Spine.Builder.add b (to_any (f i))) (i + 1)
+  in
   fun n ~f ->
     if n < 0 then invalid_arg "Vec.init";
-    go n ~f empty 0
+    go n ~f Spine.Builder.empty 0
 ;;
 
 let sub (type a) (t : a t) ~pos ~len : a t =
@@ -168,12 +174,16 @@ let sexp_of_t (sexp_of_a : 'a -> Sexp.t) (t : 'a t) =
   Sexp.List (fold_right t ~init:[] ~f:(fun a acc -> sexp_of_a a :: acc))
 ;;
 
-let of_list l = List.fold l ~init:empty ~f:snoc
+let of_list (type a) (l : a list) : a t =
+  List.fold (opaque_magic l : any list) ~init:Spine.Builder.empty ~f:Spine.Builder.add
+  |> Spine.Builder.to_spine ~dim
+;;
+
 let of_sequence s = Sequence.fold s ~init:empty ~f:snoc
 
-let of_array a =
-  (* TODO: this could be much better *)
-  Array.fold a ~init:empty ~f:snoc
+let of_array (type a) (a : a array) : a t =
+  Spine.Builder.(add_arr empty) (opaque_magic a : any array)
+  |> Spine.Builder.to_spine ~dim
 ;;
 
 let t_of_sexp (type a) (a_of_sexp : Sexp.t -> a) (sexp : Sexp.t) : a t =
@@ -215,8 +225,8 @@ let weiv (t : 'a t) : ('a t, 'a) View.t =
 ;;
 
 let concat_map t ~f =
-  (* TODO: improve implementation *)
-  fold t ~init:empty ~f:(fun t x -> append t (f x))
+  fold t ~init:Spine.Builder.empty ~f:(fun b x -> Spine.Builder.add_spine b (f x) ~dim)
+  |> Spine.Builder.to_spine ~dim
 ;;
 
 let concat t = concat_map t ~f:Fn.id
@@ -228,6 +238,16 @@ include Monad.Make (struct
   let map = `Custom map
   let bind = concat_map
 end)
+
+include
+  Quickcheckable.Of_quickcheckable1
+    (List)
+    (struct
+      type nonrec 'a t = 'a t
+
+      let of_quickcheckable = of_list
+      let to_quickcheckable = to_list
+    end)
 
 let%test_module _ =
   (module struct
@@ -251,47 +271,91 @@ let%test_module _ =
       test_result t ~expect:(to_list t)
     ;;
 
+    let%test_unit "list conversions" =
+      Quickcheck.test [%quickcheck.generator: int list] ~f:(fun l ->
+        [%test_result: int list] (to_list (of_list l)) ~expect:l)
+    ;;
+
+    let%test_unit "array conversions" =
+      Quickcheck.test [%quickcheck.generator: int array] ~f:(fun a ->
+        [%test_result: int array] (to_array (of_array a)) ~expect:a)
+    ;;
+
+    let%test_unit "init" =
+      Quickcheck.test [%quickcheck.generator: int array] ~f:(fun a ->
+        [%test_result: int array]
+          (to_array (init (Array.length a) ~f:(Array.get a)))
+          ~expect:a)
+    ;;
+
+    let%test_unit "concat_map" =
+      Quickcheck.test
+        [%quickcheck.generator: int list * (int -> int list)]
+        ~f:(fun (l, f) ->
+        let f' x = of_list (f x) in
+        [%test_result: int list]
+          (to_list (concat_map (of_list l) ~f:f'))
+          ~expect:(List.concat_map l ~f))
+    ;;
+
+    let%test_unit "append" =
+      Quickcheck.test [%quickcheck.generator: int t * int t] ~f:(fun (t1, t2) ->
+        [%test_result: int list] (to_list (append t1 t2)) ~expect:(to_list t1 @ to_list t2))
+    ;;
+
+    let%test_unit "rev" =
+      Quickcheck.test [%quickcheck.generator: int t] ~f:(fun t ->
+        [%test_result: int list] (to_list (rev t)) ~expect:(List.rev (to_list t)))
+    ;;
+
+    let%expect_test "dedup_and_sort" =
+      print_s
+        [%sexp
+          (dedup_and_sort (of_list [ 1; 5; 2; 3; 2; 2; 7; 8; 4; 9; 6; 0; 2 ]) ~compare
+            : int t)];
+      [%expect {| (0 1 2 3 4 5 6 7 8 9)  |}];
+      Quickcheck.test [%quickcheck.generator: int t] ~f:(fun t ->
+        [%test_result: int list]
+          (to_list (dedup_and_sort t ~compare))
+          ~expect:(List.dedup_and_sort (to_list t) ~compare));
+      [%expect {||}]
+    ;;
+
     let%expect_test "of_list" =
       let (_ : int t) =
         List.fold [ 0; 1; 2; 3; 4; 5 ] ~init:empty ~f:(fun t x ->
           let t = snoc t x in
-          print_s [%sexp (Or_error.try_with (fun () -> check t) : unit Or_error.t)];
+          check t;
           print_s [%sexp (t : debug)];
           t)
       in
       [%expect
         {|
-        (Ok ())
         ((len 1) (data (0)))
-        (Ok ())
         ((prefix (0))
          (prefix_len 1)
          (data ((len 0) (data ())))
          (data_len 0)
          (suffix (1))
          (suffix_len 1))
-        (Ok ())
         ((prefix (0))
          (prefix_len 1)
          (data ((len 0) (data ())))
          (data_len 0)
          (suffix (1 2))
          (suffix_len 2))
-        (Ok ())
         ((prefix (0))
          (prefix_len 1)
          (data ((len 0) (data ())))
          (data_len 0)
          (suffix (1 2 3))
          (suffix_len 3))
-        (Ok ())
         ((prefix (0))
          (prefix_len 1)
          (data ((len 3) (data ((1 2 3)))))
          (data_len 3)
          (suffix (4))
          (suffix_len 1))
-        (Ok ())
         ((prefix (0))
          (prefix_len 1)
          (data ((len 3) (data ((1 2 3)))))
@@ -306,7 +370,8 @@ let%test_module _ =
       check t;
       [%test_result: int] (length t) ~expect:20;
       print_s [%sexp (t : debug)];
-      [%expect{|
+      [%expect
+        {|
         ((prefix (1))
          (prefix_len 1)
          (data (
@@ -444,7 +509,7 @@ let%test_module _ =
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
-      [%expect{| (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) |}]
+      [%expect {| (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20) |}]
     ;;
 
     let%expect_test "snoc" =
@@ -474,7 +539,7 @@ let%test_module _ =
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
-      [%expect{| (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21) |}]
+      [%expect {| (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21) |}]
     ;;
 
     let%expect_test "to_array" =
@@ -484,25 +549,7 @@ let%test_module _ =
         t := snoc !t i;
         [%test_result: int array] (to_array !t) ~expect:(Array.of_list (to_list !t))
       done;
-      [%expect{||}]
-    ;;
-
-    let%expect_test "rev" =
-      let t = ref empty in
-      [%test_result: int array] (to_array (rev !t)) ~expect:(Array.rev (to_array !t));
-      for i = 0 to 30 do
-        t := snoc !t i;
-        [%test_result: int array] (to_array (rev !t)) ~expect:(Array.rev (to_array !t))
-      done;
-      [%expect{||}]
-    ;;
-
-    let%expect_test "dedup_and_sort" =
-      print_s
-        [%sexp
-          (dedup_and_sort (of_list [ 1; 5; 2; 3; 2; 2; 7; 8; 4; 9; 6; 0; 2 ]) ~compare
-            : int t)];
-      [%expect{| (0 1 2 3 4 5 6 7 8 9) |}]
+      [%expect {||}]
     ;;
   end)
 ;;

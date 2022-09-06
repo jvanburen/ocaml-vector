@@ -1,4 +1,4 @@
-open Base
+open! Core
 
 type +'a t [@@deriving equal, compare, sexp]
 
@@ -7,6 +7,7 @@ module Lexicographic : sig
 end
 
 include Indexed_container.S1 with type 'a t := 'a t
+include Quickcheckable.S1 with type 'a t := 'a t
 include Monad.S with type 'a t := 'a t
 module To_array : Blit.S1_distinct with type 'a src := 'a t and type 'a dst := 'a array
 

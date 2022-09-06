@@ -1,5 +1,9 @@
 type elt = Multi_array.elt
-type 'a dim = 'a Multi_array.Dim.t
+
+type 'a dim = 'a Multi_array.Dim.t =
+  | Z : Multi_array.elt dim
+  | S : int * 'a dim -> 'a array dim
+
 type 'a height = 'a Multi_array.Height.t
 
 let max_width = Multi_array.Dim.max_width
@@ -316,12 +320,8 @@ module Builder = struct
         }
         -> 'data node
 
-  type t =
-    { mutable len : int
-    ; mutable node : elt array node
-    }
+  type t = elt array node
 
-  let create () : t = { len = 0; node = Empty }
   let[@inline] trunc a ~len = if len = Array.length a then a else Array.sub a ~pos:0 ~len
 
   let[@inline] extend_nonempty src ~len =
@@ -382,6 +382,7 @@ module Builder = struct
   ;;
 
   let rec add_arr : 'a. 'a array node -> 'a array -> pos:int -> len:int -> 'a array node =
+    (* TODO: could probably avoid copying some arrays in here in special cases. *)
     fun (type a) (node : a array node) (a : a array) ~pos ~len : a array node ->
      if len = 0
      then node
@@ -394,7 +395,21 @@ module Builder = struct
          let added = min len (Array.length b.data - b.len) in
          Array.blit ~src:a ~src_pos:pos ~dst:b.data ~dst_pos:b.len ~len:added;
          b.len <- b.len + added;
-         add_arr node a ~pos:(pos + added) ~len:(len - added)
+         let pos = pos + added
+         and len = len - added in
+         if len = 0
+         then node
+         else (
+           let node =
+             Spine
+               { prefix = b.data
+               ; prefix_len = b.len
+               ; data = Empty
+               ; suffix = Array.create a.(pos) ~len:max_width
+               ; suffix_len = 1
+               }
+           in
+           add_arr node a ~pos:(pos + 1) ~len:(len - 1))
        | Spine s ->
          let added = min len (Array.length s.suffix - s.suffix_len) in
          Array.blit ~src:a ~src_pos:pos ~dst:s.suffix ~dst_pos:s.suffix_len ~len:added;
@@ -444,20 +459,32 @@ module Builder = struct
          }
   ;;
 
-  let add t elt =
-    t.len <- t.len + 1;
-    t.node <- add t.node elt
+  let[@inline] add_arr node a = add_arr node a ~pos:0 ~len:(Array.length a)
+
+  let rec add_multi_array : 'a. t -> 'a array -> dim:'a array dim -> t =
+    fun (type a) (t : t) (arr : a array) ~(dim : a array dim) : t ->
+     match dim with
+     | S (_, Z) -> add_arr t arr
+     | S (_, (S _ as dim)) ->
+       Array.fold arr ~init:t ~f:(fun node arr -> add_multi_array node arr ~dim)
   ;;
 
-  let add_arr t a ~pos ~len =
-    Ordered_collection_common.check_pos_len_exn ~pos ~len ~total_length:(Array.length a);
-    t.len <- t.len + len;
-    t.node <- add_arr t.node a ~pos ~len
+  let rec add_spine : 'a. t -> 'a array spine -> dim:'a array dim -> t =
+    fun (type a) (t : t) (spine : a array spine) ~(dim : a array dim) : t ->
+     match spine with
+     | Base b -> add_multi_array t b.data ~dim
+     | Spine s ->
+       let t = add_multi_array t s.prefix ~dim in
+       let t = add_spine t s.data ~dim:(next dim) in
+       add_multi_array t s.suffix ~dim
   ;;
 
-  let to_spine t ~dim =
-    let spine = to_spine t.node ~dim in
-    [%test_result: int] (length spine) ~expect:t.len;
-    spine
+  (* TODO: allow specifying pos/len (for better [sub] implementation) *)
+  let add_spine t spine ~dim =
+    match t with
+    | Empty -> of_spine spine ~dim
+    | t -> if phys_equal spine empty then t else add_spine t spine ~dim
   ;;
+
+  let empty = Empty
 end
