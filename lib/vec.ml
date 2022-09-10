@@ -213,10 +213,21 @@ let stable_sort (type a) (t : a t) ~(compare : a -> a -> int) : a t =
 ;;
 
 let dedup_and_sort (type a) (t : a t) ~(compare : a -> a -> int) : a t =
-  let a = to_array t in
-  Array.sort a ~compare;
-  Array.fold_right a ~init:empty ~f:(fun x t ->
-    if is_empty t then singleton x else if compare x (get t 0) = 0 then t else cons x t)
+  match length t with
+  | 0 -> t
+  | len ->
+    let a = to_array t in
+    Array.sort a ~compare;
+    let prev = ref a.(0) in
+    let builder = ref Spine.Builder.(add empty (to_any !prev)) in
+    for i = 1 to len - 1 do
+      let next = a.(i) in
+      if compare next !prev <> 0
+      then (
+        prev := next;
+        builder := Spine.Builder.add !builder (to_any next))
+    done;
+    Spine.Builder.to_spine !builder ~dim
 ;;
 
 let hd_exn t = get t 0
@@ -437,60 +448,6 @@ let%test_module _ =
          (suffix (20))
          (suffix_len 1)) |}]
     ;;
-
-    (* TODO: test [set] *)
-    (*     let%expect_test "set" = *)
-    (*       print_s [%sexp (t : debug)]; *)
-    (*       let l = Array.of_list (to_list t in       *)
-    (*       for i = 0 to length t - 1 do *)
-    (* let expect =  *)
-    (* k *)
-
-    (*   done *)
-    (*   List.init       *)
-    (*   print_elems t; *)
-    (*   [%expect *)
-    (*     {| *)
-    (*     ((prefix (1 2 3)) *)
-    (*      (prefix_len 3) *)
-    (*      (width      3) *)
-    (*      (data ( *)
-    (*        (prefix ( *)
-    (*          (4  5  6) *)
-    (*          (7  8  9) *)
-    (*          (10 11 12))) *)
-    (*        (prefix_len 9) *)
-    (*        (width      3) *)
-    (*        (data ((len 0) (data ()))) *)
-    (*        (data_len 0) *)
-    (*        (suffix ( *)
-    (*          (13 14 15) *)
-    (*          (16 17 18))) *)
-    (*        (suffix_len 6))) *)
-    (*      (data_len 15) *)
-    (*      (suffix (19 20)) *)
-    (*      (suffix_len 2)) *)
-    (*     ((0  (Ok 1)) *)
-    (*      (1  (Ok 2)) *)
-    (*      (2  (Ok 3)) *)
-    (*      (3  (Ok 4)) *)
-    (*      (4  (Ok 5)) *)
-    (*      (5  (Ok 6)) *)
-    (*      (6  (Ok 7)) *)
-    (*      (7  (Ok 8)) *)
-    (*      (8  (Ok 9)) *)
-    (*      (9  (Ok 10)) *)
-    (*      (10 (Ok 11)) *)
-    (*      (11 (Ok 12)) *)
-    (*      (12 (Ok 13)) *)
-    (*      (13 (Ok 14)) *)
-    (*      (14 (Ok 15)) *)
-    (*      (15 (Ok 16)) *)
-    (*      (16 (Ok 17)) *)
-    (*      (17 (Ok 18)) *)
-    (*      (18 (Ok 19)) *)
-    (*      (19 (Ok 20))) |}] *)
-    (* ;; *)
 
     let%expect_test "cons" =
       let t = cons 0 t in

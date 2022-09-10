@@ -46,6 +46,22 @@ struct
            (module struct
              let%bench "of_list" = M.of_list strings_list
              let%bench "to_list" = M.to_list strings
+
+             let%bench "get sequential (1k)" =
+               assert (len >= 1000);
+               for i = 0 to 999 do
+                 ignore (Sys.opaque_identity (M.get ints i))
+               done
+             ;;
+
+             let%bench_fun "get random (1k)" =
+               let prng = prng () in
+               let indices = Array.init 1_000 ~f:(fun _ -> Random.State.int prng len) in
+               fun () ->
+                 for i = 0 to 999 do
+                   ignore (Sys.opaque_identity (M.get ints (Array.unsafe_get indices i)))
+                 done
+             ;;
            end : Empty))
 
   include
@@ -58,12 +74,6 @@ struct
            end : Empty))
 
   let%bench "map" = M.map strings ~f:Fn.id
-
-  let%bench_fun "get" =
-    let prng = prng () in
-    fun () -> M.get ints (Random.State.int prng len)
-  ;;
-
   let%bench "fold_right" = M.fold_right ints ~init:0 ~f:( + )
   let%bench "fold_left" = M.fold_left ints ~init:0 ~f:( + )
   let%bench "cons" = M.cons "front" strings
@@ -197,4 +207,16 @@ Model Identifier:	MacBookPro18,2
 Chip:	Apple M1 Max
 Total Number of Cores:	10 (8 performance and 2 efficiency)
 Memory:	64 GB
+
+Compiler:
+target: aarch64-apple-darwin21.6.0
+flambda: true
+safe_string: true
+default_safe_string: true
+flat_float_array: false
+function_sections: false
+afl_instrument: false
+windows_unicode: false
+supports_shared_libraries: true
+naked_pointers: true
 *)

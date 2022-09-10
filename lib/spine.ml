@@ -1,32 +1,31 @@
+open! Core
+
 type elt = Multi_array.elt
+type 'a dim = 'a Multi_array.Dim.t
 
-type 'a dim = 'a Multi_array.Dim.t =
-  | Z : Multi_array.elt dim
-  | S : int * 'a dim -> 'a array dim
-
-type 'a height = 'a Multi_array.Height.t
+type 'a kind = 'a Multi_array.Dim.kind =
+  | One : elt array kind
+  | Many : 'a array array kind
 
 let max_width = Multi_array.Dim.max_width
 let cols = Multi_array.Dim.cols
 let next = Multi_array.Dim.next
-let[@inline] ( .+() ) a (i, dim) = Multi_array.get a i ~dim
-let[@inline] ( .+()<- ) a (i, dim) x = Multi_array.set a i x ~dim
 
 let ( @> ) src x =
   let len = Array.length src in
-  let dst = Array.make (len + 1) x in
-  ArrayLabels.blit ~src ~src_pos:0 ~dst ~dst_pos:0 ~len;
+  let dst = Array.create x ~len:(len + 1) in
+  Array.unsafe_blit ~src ~src_pos:0 ~dst ~dst_pos:0 ~len;
   dst
 ;;
 
 let ( <@ ) x src =
   let len = Array.length src in
-  let dst = Array.make (len + 1) x in
-  ArrayLabels.blit ~src ~src_pos:0 ~dst ~dst_pos:1 ~len;
+  let dst = Array.create x ~len:(len + 1) in
+  Array.unsafe_blit ~src ~src_pos:0 ~dst ~dst_pos:1 ~len;
   dst
 ;;
 
-let ( -$ ) x y = if x >= y then Some (x - y) else None
+let[@inline] ( -$ ) x y = x - y
 
 (* TODO: store pre/pre+data/total lengths instead of pre/data/suff *)
 type _ t =
@@ -45,24 +44,20 @@ type _ t =
       }
       -> 'data t
 
-include struct
-  open Base
-
-  let rec sexp_of_t : 'arr. ('arr -> Sexp.t) -> 'arr t -> Sexp.t =
-    fun (type arr) (sexp_of_arr : arr -> Sexp.t) (t : arr t) : Sexp.t ->
-     match t with
-     | Base { len; data } -> [%sexp { len : int; data : arr }]
-     | Spine { prefix_len; data_len; suffix_len; prefix; suffix; data } ->
-       [%sexp
-         { prefix : arr
-         ; prefix_len : int
-         ; data : arr array t
-         ; data_len : int
-         ; suffix : arr
-         ; suffix_len : int
-         }]
-  ;;
-end
+let rec sexp_of_t : 'arr. ('arr -> Sexp.t) -> 'arr t -> Sexp.t =
+  fun (type arr) (sexp_of_arr : arr -> Sexp.t) (t : arr t) : Sexp.t ->
+   match t with
+   | Base { len; data } -> [%sexp { len : int; data : arr }]
+   | Spine { prefix_len; data_len; suffix_len; prefix; suffix; data } ->
+     [%sexp
+       { prefix : arr
+       ; prefix_len : int
+       ; data : arr array t
+       ; data_len : int
+       ; suffix : arr
+       ; suffix_len : int
+       }]
+;;
 
 let empty = Base { len = 0; data = [||] }
 
@@ -75,27 +70,27 @@ let length (type a) (t : a t) =
 let rec get : 'a. 'a array t -> int -> dim:'a array dim -> elt =
   fun (type a) (t : a array t) (i : int) ~(dim : a array dim) : elt ->
    match t with
-   | Base b -> b.data.+(i, dim)
+   | Base b -> Multi_array.get b.data i ~dim
    | Spine s ->
      (match i -$ s.prefix_len with
-      | None -> s.prefix.+(i, dim)
-      | Some i ->
+      | q when q < 0 -> Multi_array.get s.prefix i ~dim
+      | i ->
         (match i -$ s.data_len with
-         | None -> get s.data i ~dim:(next dim)
-         | Some i -> s.suffix.+(i, dim)))
+         | q when q < 0 -> get s.data i ~dim:(next dim)
+         | i -> Multi_array.get s.suffix i ~dim))
 ;;
 
 let rec set : 'a. 'a array t -> int -> elt -> dim:'a array dim -> 'a array t =
   fun (type a) (t : a array t) (i : int) (elt : elt) ~(dim : a array dim) : a array t ->
    match t with
-   | Base b -> Base { b with data = b.data.+(i, dim) <- elt }
+   | Base b -> Base { b with data = Multi_array.set b.data i elt ~dim }
    | Spine s ->
      (match i -$ s.prefix_len with
-      | None -> Spine { s with prefix = s.prefix.+(i, dim) <- elt }
-      | Some i ->
+      | q when q < 0 -> Spine { s with prefix = Multi_array.set s.prefix i elt ~dim }
+      | i ->
         (match i -$ s.data_len with
-         | None -> Spine { s with data = set s.data i elt ~dim:(next dim) }
-         | Some i -> Spine { s with suffix = s.suffix.+(i, dim) <- elt }))
+         | q when q < 0 -> Spine { s with data = set s.data i elt ~dim:(next dim) }
+         | i -> Spine { s with suffix = Multi_array.set s.suffix i elt ~dim }))
 ;;
 
 let rec cons : 'a. 'a -> 'a array t -> dim:'a array dim -> 'a array t =
@@ -225,8 +220,8 @@ module To_array = struct
   let[@inline] blit_helper ~src_len ~src_pos ~(dst : elt array) ~dst_pos ~len ~blit ~next =
     let written_from_src =
       match src_len -$ src_pos with
-      | None -> 0
-      | Some src_len ->
+      | q when q < 0 -> 0
+      | src_len ->
         let len = min len src_len in
         blit ~src_pos ~dst ~dst_pos ~len;
         len
@@ -278,8 +273,6 @@ module To_array = struct
   ;;
 end
 
-open! Base
-
 let rec actual_len : 'arr. 'arr array t -> dim:'arr array dim -> int =
   fun (type arr) (t : arr array t) ~(dim : arr array dim) : int ->
    match t with
@@ -300,7 +293,6 @@ let invariant t ~dim =
   [%test_result: int] (length t) ~expect
 ;;
 
-(* TODO: test / use this... *)
 module Builder = struct
   type 'a spine = 'a t
 
@@ -463,9 +455,10 @@ module Builder = struct
 
   let rec add_multi_array : 'a. t -> 'a array -> dim:'a array dim -> t =
     fun (type a) (t : t) (arr : a array) ~(dim : a array dim) : t ->
-     match dim with
-     | S (_, Z) -> add_arr t arr
-     | S (_, (S _ as dim)) ->
+     match Multi_array.Dim.kind dim with
+     | One -> add_arr t arr
+     | Many ->
+       let dim = Multi_array.Dim.inner dim in
        Array.fold arr ~init:t ~f:(fun node arr -> add_multi_array node arr ~dim)
   ;;
 
