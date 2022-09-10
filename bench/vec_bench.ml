@@ -105,7 +105,24 @@ let%bench_module "Array" =
     let hd_exn t = t.(0)
     let last_exn t = t.(Array.length t - 1)
     let fold_left = fold
-    let concat = concat_map ~f:Fn.id
+
+    let concat (type a) (ts : a t t) =
+      let ts : a Uniform_array.t Uniform_array.t = Obj.magic ts in
+      let outer_len = Uniform_array.length ts in
+      let total_len = ref 0 in
+      for i = 0 to outer_len - 1 do
+        total_len := !total_len + Uniform_array.length (Uniform_array.unsafe_get ts i)
+      done;
+      let dst = Uniform_array.unsafe_create_uninitialized ~len:!total_len in
+      let dst_pos = ref 0 in
+      for i = 0 to outer_len - 1 do
+        let src = Uniform_array.unsafe_get ts i in
+        let len = Uniform_array.length src in
+        Uniform_array.unsafe_blit ~src ~src_pos:0 ~dst ~dst_pos:!dst_pos ~len;
+        dst_pos := !dst_pos + len
+      done;
+      (Obj.magic dst : a array)
+    ;;
 
     let cons x xs =
       let len = Array.length xs in

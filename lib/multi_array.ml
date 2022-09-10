@@ -1,3 +1,5 @@
+open! Core
+
 type elt = private
   | Immediate
   | Not_a_float of int
@@ -27,6 +29,8 @@ type 'a dim = 'a Dim.t
 type 'a t = 'a * 'a dim
 
 let cols = Dim.cols
+
+external ( mod ) : int -> int -> int = "%modint"
 
 let rec get : 't. 't -> int -> dim:'t dim -> elt =
   fun (type t) (t : t) (i : int) ~(dim : t dim) : elt ->
@@ -66,7 +70,7 @@ let rec fold_right :
   fun (type t acc) (t : t) ~(f : elt -> acc -> acc) ~(init : acc) ~(dim : t dim) : acc ->
    match dim with
    | Z -> f t init
-   | S (_, Z) -> ArrayLabels.fold_right t ~f ~init
+   | S (_, Z) -> Array.fold_right t ~f ~init
    | S (_, dim) ->
      let init = ref init in
      for i = Array.length t - 1 downto 0 do
@@ -79,7 +83,7 @@ let rec map : 't. 't -> f:(elt -> elt) -> dim:'t dim -> 't =
   fun (type t) (t : t) ~(f : elt -> elt) ~(dim : t dim) : t ->
    match dim with
    | Z -> f t
-   | S (_, dim) -> ArrayLabels.map t ~f:(fun t -> map t ~f ~dim)
+   | S (_, dim) -> Array.map t ~f:(fun t -> map t ~f ~dim)
 ;;
 
 let rec rev : 't. 't -> dim:'t dim -> 't =
@@ -90,7 +94,7 @@ let rec rev : 't. 't -> dim:'t dim -> 't =
      (match Array.length t with
       | 0 -> [||]
       | len ->
-        let reversed = Array.make len (rev t.(0) ~dim) in
+        let reversed = Array.create (rev t.(0) ~dim) ~len in
         for i = 1 to len - 1 do
           Array.unsafe_set reversed (len - i - 1) (rev (Array.unsafe_get t i) ~dim)
         done;
@@ -99,7 +103,7 @@ let rec rev : 't. 't -> dim:'t dim -> 't =
 
 let rec equal : 't. (elt -> elt -> bool) -> 't -> 't -> dim:'t dim -> bool =
   fun (type t) (equal_elt : elt -> elt -> bool) (x : t) (y : t) ~(dim : t dim) : bool ->
-   x == y
+   phys_equal x y
    ||
    match dim with
    | Z -> equal_elt x y
@@ -132,7 +136,7 @@ and equal_arr :
 
 let rec compare : 't. (elt -> elt -> int) -> 't -> 't -> dim:'t dim -> int =
   fun (type t) (compare_elt : elt -> elt -> int) (x : t) (y : t) ~(dim : t dim) : int ->
-   if x == y
+   if phys_equal x y
    then 0
    else (
      match dim with
@@ -163,7 +167,7 @@ and compare_arr :
 module Lexicographic = struct
   let rec compare : 't. (elt -> elt -> int) -> 't -> 't -> dim:'t dim -> int =
     fun (type t) (compare_elt : elt -> elt -> int) (x : t) (y : t) ~(dim : t dim) : int ->
-     if x == y
+     if phys_equal x y
      then 0
      else (
        match dim with
@@ -214,7 +218,7 @@ module To_array = struct
      then ()
      else (
        match dim with
-       | S (_, Z) -> ArrayLabels.blit ~src ~src_pos ~dst ~dst_pos ~len
+       | S (_, Z) -> Array.blit ~src ~src_pos ~dst ~dst_pos ~len
        | S (cols, (S _ as dim)) ->
          let dst_pos = ref dst_pos in
          let len = ref len in
@@ -229,7 +233,7 @@ module To_array = struct
              ~dst_pos:!dst_pos
              ~len:sub_len
              ~dim;
-           incr i;
+           Int.incr i;
            len := !len - sub_len;
            src_pos := 0;
            dst_pos := !dst_pos + sub_len
@@ -244,21 +248,18 @@ let length (type t) (t : t) ~(dim : t dim) =
 ;;
 
 let rec actual_len : 't. 't -> dim:'t dim -> int =
-  let open Base in
   fun (type t) (t : t) ~(dim : t dim) : int ->
-    match dim with
-    | Z -> 1
-    | S (cols, dim) ->
-      Array.sum
-        (module Int)
-        t
-        ~f:(fun a ->
-          let len = actual_len a ~dim in
-          [%test_result: int] len ~expect:cols;
-          len)
+   match dim with
+   | Z -> 1
+   | S (cols, dim) ->
+     Array.sum
+       (module Int)
+       t
+       ~f:(fun a ->
+         let len = actual_len a ~dim in
+         [%test_result: int] len ~expect:cols;
+         len)
 ;;
-
-open Base
 
 type 'a height = 'a Height.t
 

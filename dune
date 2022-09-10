@@ -1,0 +1,3 @@
+(env
+ (release
+  (ocamlopt_flags (:standard -O3 -rounds 5 -inline 100 -inline-max-unroll 5))))
