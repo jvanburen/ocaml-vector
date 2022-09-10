@@ -295,7 +295,6 @@ let invariant t ~dim =
   [%test_result: int] (length t) ~expect
 ;;
 
-(* TODO: test / use this... *)
 module Builder = struct
   type 'a spine = 'a t
 
@@ -303,19 +302,19 @@ module Builder = struct
     | Empty : _ node
     | Base :
         { mutable len : int
-        ; mutable data : 'data node
+        ; mutable data : 'data Multi_array.node
         }
-        -> 'data node node
+        -> 'data array node
     | Spine :
         { mutable prefix_len : int
         ; mutable prefix : 'data
-        ; mutable data : 'data node node
+        ; mutable data : 'data array node
         ; mutable suffix_len : int
         ; mutable suffix : 'data
         }
         -> 'data node
 
-  type t = elt node node
+  type t = elt array node
 
   let[@inline] trunc a ~len = if len = Array.length a then a else Array.sub a ~pos:0 ~len
 
@@ -345,10 +344,45 @@ module Builder = struct
            dst))
   ;;
 
-  let rec add : 'a. 'a node node -> 'a -> 'a node node =
-    fun (type a) (node : a node node) (elt : a) : a node node ->
+  let create_empty_node (type t) (t : t) ~(dim : t Multi_array.node dim)
+    : t Multi_array.node
+    =
+    let width = max_width - 2 in
+    match dim with
+    | One _ ->
+      { size = -1
+      ; prefix_sizes = Array.init width ~f:(fun i -> i)
+      ; storage = Array.create t ~len:width
+      }
+    | S (_, _) ->
+      { size = -1
+      ; prefix_sizes = Array.init width ~f:(fun i -> i * t.size)
+      ; storage = Array.create t ~len:width
+      }
+  ;;
+
+  let truncate (type t) (t : t Multi_array.node) ~width =
+    if width = Array.length t.storage
+    then t
+    else
+      { size = t.prefix_sizes.(width)
+      ; prefix_sizes = Array.sub t.prefix_sizes ~pos:0 ~len:width
+      ; storage = Array.sub t.storage ~pos:0 ~len:width
+      }
+  ;;
+
+  let rec add : 'a. 'a array node -> 'a -> 'a array node =
+    fun (type a) (node : a array node) (elt : a) : a array node ->
      match node with
-     | Empty -> Base { len = 1; data = Array.create elt ~len:(max_width - 2) }
+     | Empty ->
+       Base
+         { len = 1
+         ; data =
+             { size = max_width - 2
+             ; prefix_sizes = Array.init (max_width - 2) ~f:Fn.id
+             ; storage = Array.create elt ~len:(max_width - 2)
+             }
+         }
      | Base b ->
        (match set_maybe_extend b.data b.len elt ~max_len:(max_width - 2) with
         | Some data ->
@@ -376,9 +410,9 @@ module Builder = struct
           node)
   ;;
 
-  let rec add_arr : 'a. 'a node node -> 'a node -> pos:int -> len:int -> 'a node node =
+  let rec add_arr : 'a. 'a array node -> 'a array -> pos:int -> len:int -> 'a array node =
     (* TODO: could probably avoid copying some arrays in here in special cases. *)
-    fun (type a) (node : a node node) (a : a node) ~pos ~len : a node node ->
+    fun (type a) (node : a array node) (a : a array) ~pos ~len : a array node ->
      if len = 0
      then node
      else (
@@ -420,8 +454,8 @@ module Builder = struct
            add_arr node a ~pos:(pos + 1) ~len:(len - 1)))
   ;;
 
-  let rec to_spine : 'a. 'a node node -> dim:'a node dim -> 'a node spine =
-    fun (type a) (node : a node node) ~(dim : a node dim) : a node spine ->
+  let rec to_spine : 'a. 'a array node -> dim:'a array dim -> 'a Multi_array.node spine =
+    fun (type a) (node : a array node) ~(dim : a array dim) : a Multi_array.node spine ->
      match node with
      | Empty -> empty
      | Base { len; data } -> Base { len = len * cols dim; data = trunc data ~len }
