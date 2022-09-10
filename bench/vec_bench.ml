@@ -8,6 +8,7 @@ let prng () =
 let len = 1337
 let strings_array = Array.init len ~f:Int.to_string
 let strings_list = List.init len ~f:Int.to_string
+let string_seq = Array.to_sequence_mutable strings_array
 
 module type Empty = sig end
 
@@ -34,6 +35,7 @@ module Make_tests (M : sig
   val to_list : 'a t -> 'a list
   val of_array : 'a array -> 'a t
   val to_array : 'a t -> 'a array
+  val of_sequence : 'a Sequence.t -> 'a t
 end) =
 struct
   let strings = M.init len ~f:Int.to_string
@@ -71,12 +73,20 @@ struct
            (module struct
              let%bench "of_array" = M.of_array strings_array
              let%bench "to_array" = M.to_array strings
+
+             let%bench "cons 10" =
+               let m = ref strings in
+               for i = 0 to 9 do
+                 m := M.cons "front" !m
+               done;
+               !m
+             ;;
            end : Empty))
 
+  let%bench "of_sequence" = M.of_sequence string_seq
   let%bench "map" = M.map strings ~f:Fn.id
   let%bench "fold_right" = M.fold_right ints ~init:0 ~f:( + )
   let%bench "fold_left" = M.fold_left ints ~init:0 ~f:( + )
-  let%bench "cons" = M.cons "front" strings
   let%bench "hd_exn" = M.hd_exn strings
   let%bench "last_exn" = M.last_exn strings
   let%bench "append" = M.append strings strings
@@ -102,6 +112,7 @@ let%bench_module "List" =
     let is_array = false
     let of_array = Array.to_list
     let get = nth_exn
+    let of_sequence = Sequence.to_list
   end))
 ;;
 
@@ -115,6 +126,7 @@ let%bench_module "Array" =
     let hd_exn t = t.(0)
     let last_exn t = t.(Array.length t - 1)
     let fold_left = fold
+    let of_sequence = Sequence.to_array
 
     let concat (type a) (ts : a t t) =
       let ts : a Uniform_array.t Uniform_array.t = Obj.magic ts in
@@ -156,49 +168,51 @@ benchmark results 2022-09-10
 
 Vec branching factor: 32
 
-┌─────────────────────────────────────────────────────┬─────────────┬────────────┬────────────┬───────────┬────────────┐
-│ Name                                                │    Time/Run │    mWd/Run │   mjWd/Run │  Prom/Run │ Percentage │
-├─────────────────────────────────────────────────────┼─────────────┼────────────┼────────────┼───────────┼────────────┤
-│ [bench/vec_bench.ml:Make_tests:List] of_array       │  1_599.95ns │  4_016.00w │     30.95w │    30.95w │      2.57% │
-│ [bench/vec_bench.ml:Make_tests:List] to_array       │  9_461.68ns │      5.00w │  1_338.00w │           │     15.18% │
-│ [bench/vec_bench.ml:Make_tests:List] map            │  3_736.80ns │  4_011.00w │     30.84w │    30.84w │      5.99% │
-│ [bench/vec_bench.ml:Make_tests:List] get            │    638.04ns │      2.00w │            │           │      1.02% │
-│ [bench/vec_bench.ml:Make_tests:List] fold_right     │  6_147.24ns │  4_016.00w │     30.99w │    30.99w │      9.86% │
-│ [bench/vec_bench.ml:Make_tests:List] fold_left      │  3_538.05ns │            │            │           │      5.68% │
-│ [bench/vec_bench.ml:Make_tests:List] cons           │      3.07ns │      3.00w │            │           │            │
-│ [bench/vec_bench.ml:Make_tests:List] hd_exn         │      2.22ns │            │            │           │            │
-│ [bench/vec_bench.ml:Make_tests:List] last_exn       │  1_258.94ns │            │            │           │      2.02% │
-│ [bench/vec_bench.ml:Make_tests:List] append         │  3_666.79ns │  4_011.00w │     30.82w │    30.82w │      5.88% │
-│ [bench/vec_bench.ml:Make_tests:List] concat wide    │ 47_547.00ns │ 44_096.00w │  3_580.85w │ 3_580.85w │     76.27% │
-│ [bench/vec_bench.ml:Make_tests:List] concat narrow  │ 51_284.09ns │ 36_134.00w │  2_599.49w │ 2_599.49w │     82.27% │
-│ [bench/vec_bench.ml:Make_tests:Array] of_list       │  9_200.33ns │      5.00w │  1_338.00w │           │     14.76% │
-│ [bench/vec_bench.ml:Make_tests:Array] to_list       │  1_583.07ns │  4_016.00w │     31.05w │    31.05w │      2.54% │
-│ [bench/vec_bench.ml:Make_tests:Array] map           │  8_877.18ns │            │  1_338.00w │           │     14.24% │
-│ [bench/vec_bench.ml:Make_tests:Array] get           │      7.71ns │            │            │           │      0.01% │
-│ [bench/vec_bench.ml:Make_tests:Array] fold_right    │  2_860.01ns │            │            │           │      4.59% │
-│ [bench/vec_bench.ml:Make_tests:Array] fold_left     │  2_819.46ns │            │            │           │      4.52% │
-│ [bench/vec_bench.ml:Make_tests:Array] cons          │  7_249.08ns │            │  1_339.00w │           │     11.63% │
-│ [bench/vec_bench.ml:Make_tests:Array] hd_exn        │      2.47ns │            │            │           │            │
-│ [bench/vec_bench.ml:Make_tests:Array] last_exn      │      2.52ns │            │            │           │            │
-│ [bench/vec_bench.ml:Make_tests:Array] append        │ 10_537.72ns │            │  2_675.00w │           │     16.90% │
-│ [bench/vec_bench.ml:Make_tests:Array] concat wide   │ 62_339.92ns │  4_016.00w │ 14_709.00w │           │    100.00% │
-│ [bench/vec_bench.ml:Make_tests:Array] concat narrow │ 48_685.00ns │     46.00w │ 13_371.00w │           │     78.10% │
-│ [bench/vec_bench.ml:Make_tests:Vec] of_list         │  9_947.81ns │  4_191.00w │     22.87w │    22.87w │     15.96% │
-│ [bench/vec_bench.ml:Make_tests:Vec] to_list         │  3_848.25ns │  4_017.00w │     30.93w │    30.93w │      6.17% │
-│ [bench/vec_bench.ml:Make_tests:Vec] of_array        │  2_202.45ns │  1_601.00w │      8.39w │     8.39w │      3.53% │
-│ [bench/vec_bench.ml:Make_tests:Vec] to_array        │  8_715.44ns │    477.00w │  1_338.00w │           │     13.98% │
-│ [bench/vec_bench.ml:Make_tests:Vec] map             │  6_363.06ns │  1_705.00w │      7.01w │     7.01w │     10.21% │
-│ [bench/vec_bench.ml:Make_tests:Vec] get             │     23.54ns │      8.82w │            │           │      0.04% │
-│ [bench/vec_bench.ml:Make_tests:Vec] fold_right      │  3_657.83ns │      6.00w │            │           │      5.87% │
-│ [bench/vec_bench.ml:Make_tests:Vec] fold_left       │  3_490.27ns │      6.00w │            │           │      5.60% │
-│ [bench/vec_bench.ml:Make_tests:Vec] cons            │     30.08ns │     39.00w │            │           │      0.05% │
-│ [bench/vec_bench.ml:Make_tests:Vec] hd_exn          │      5.66ns │      3.00w │            │           │            │
-│ [bench/vec_bench.ml:Make_tests:Vec] last_exn        │      7.93ns │      7.00w │            │           │      0.01% │
-│ [bench/vec_bench.ml:Make_tests:Vec] append          │  2_756.32ns │  1_682.00w │      9.70w │     9.70w │      4.42% │
-│ [bench/vec_bench.ml:Make_tests:Vec] concat wide     │ 49_207.18ns │ 15_209.00w │    860.96w │   860.96w │     78.93% │
-│ [bench/vec_bench.ml:Make_tests:Vec] concat narrow   │ 28_007.10ns │ 13_937.00w │    711.51w │   711.51w │     44.93% │
-└─────────────────────────────────────────────────────┴─────────────┴────────────┴────────────┴───────────┴────────────┘
-
+┌───────────────────────────────────────────────────────────┬─────────────┬────────────┬────────────┬───────────┬────────────┐
+│ Name                                                      │    Time/Run │    mWd/Run │   mjWd/Run │  Prom/Run │ Percentage │
+├───────────────────────────────────────────────────────────┼─────────────┼────────────┼────────────┼───────────┼────────────┤
+│ [bench/vec_bench.ml:Make_tests:List] of_array             │  1_600.70ns │  4_016.00w │     30.97w │    30.97w │      3.16% │
+│ [bench/vec_bench.ml:Make_tests:List] to_array             │  9_483.08ns │      5.00w │  1_338.00w │           │     18.75% │
+│ [bench/vec_bench.ml:Make_tests:List] cons 10              │     22.65ns │     30.00w │            │           │      0.04% │
+│ [bench/vec_bench.ml:Make_tests:List] of_sequence          │  9_279.23ns │ 10_536.00w │    121.12w │   121.12w │     18.35% │
+│ [bench/vec_bench.ml:Make_tests:List] map                  │  3_752.97ns │  4_011.00w │     30.89w │    30.89w │      7.42% │
+│ [bench/vec_bench.ml:Make_tests:List] fold_right           │  6_205.43ns │  4_016.00w │     30.99w │    30.99w │     12.27% │
+│ [bench/vec_bench.ml:Make_tests:List] fold_left            │  3_576.20ns │            │            │           │      7.07% │
+│ [bench/vec_bench.ml:Make_tests:List] hd_exn               │      2.21ns │            │            │           │            │
+│ [bench/vec_bench.ml:Make_tests:List] last_exn             │  1_279.16ns │            │            │           │      2.53% │
+│ [bench/vec_bench.ml:Make_tests:List] append               │  3_661.35ns │  4_011.00w │     30.81w │    30.81w │      7.24% │
+│ [bench/vec_bench.ml:Make_tests:List] concat wide          │ 47_304.65ns │ 44_096.00w │  3_578.89w │ 3_578.89w │     93.52% │
+│ [bench/vec_bench.ml:Make_tests:List] concat narrow        │ 50_580.93ns │ 36_134.00w │  2_608.32w │ 2_608.32w │    100.00% │
+│ [bench/vec_bench.ml:Make_tests:Array] of_list             │  9_308.50ns │      5.00w │  1_338.00w │           │     18.40% │
+│ [bench/vec_bench.ml:Make_tests:Array] to_list             │  1_586.67ns │  4_016.00w │     30.98w │    30.98w │      3.14% │
+│ [bench/vec_bench.ml:Make_tests:Array] get sequential (1k) │  2_131.14ns │            │            │           │      4.21% │
+│ [bench/vec_bench.ml:Make_tests:Array] get random (1k)     │  2_231.39ns │            │            │           │      4.41% │
+│ [bench/vec_bench.ml:Make_tests:Array] of_sequence         │ 17_259.96ns │ 12_038.00w │  1_437.17w │    99.17w │     34.12% │
+│ [bench/vec_bench.ml:Make_tests:Array] map                 │  9_669.73ns │            │  1_338.00w │           │     19.12% │
+│ [bench/vec_bench.ml:Make_tests:Array] fold_right          │  2_904.04ns │            │            │           │      5.74% │
+│ [bench/vec_bench.ml:Make_tests:Array] fold_left           │  2_836.81ns │            │            │           │      5.61% │
+│ [bench/vec_bench.ml:Make_tests:Array] hd_exn              │      2.49ns │            │            │           │            │
+│ [bench/vec_bench.ml:Make_tests:Array] last_exn            │      2.58ns │            │            │           │            │
+│ [bench/vec_bench.ml:Make_tests:Array] append              │ 10_706.32ns │            │  2_675.00w │           │     21.17% │
+│ [bench/vec_bench.ml:Make_tests:Array] concat wide         │ 45_073.06ns │            │ 13_371.00w │           │     89.11% │
+│ [bench/vec_bench.ml:Make_tests:Array] concat narrow       │ 42_023.58ns │            │ 13_371.00w │           │     83.08% │
+│ [bench/vec_bench.ml:Make_tests:Vec] of_list               │  9_732.37ns │  4_185.00w │     23.38w │    23.38w │     19.24% │
+│ [bench/vec_bench.ml:Make_tests:Vec] to_list               │  3_902.56ns │  4_032.00w │     30.06w │    30.06w │      7.72% │
+│ [bench/vec_bench.ml:Make_tests:Vec] get sequential (1k)   │  4_801.75ns │            │            │           │      9.49% │
+│ [bench/vec_bench.ml:Make_tests:Vec] get random (1k)       │  6_475.17ns │            │            │           │     12.80% │
+│ [bench/vec_bench.ml:Make_tests:Vec] of_array              │  2_055.45ns │  1_595.00w │      8.56w │     8.56w │      4.06% │
+│ [bench/vec_bench.ml:Make_tests:Vec] to_array              │  8_176.18ns │    460.00w │  1_338.00w │           │     16.16% │
+│ [bench/vec_bench.ml:Make_tests:Vec] cons 10               │    230.68ns │    218.00w │            │           │      0.46% │
+│ [bench/vec_bench.ml:Make_tests:Vec] of_sequence           │ 11_815.02ns │  8_196.00w │     44.89w │    44.89w │     23.36% │
+│ [bench/vec_bench.ml:Make_tests:Vec] map                   │  5_408.31ns │  1_447.00w │      5.97w │     5.97w │     10.69% │
+│ [bench/vec_bench.ml:Make_tests:Vec] fold_right            │  3_610.85ns │     21.00w │            │           │      7.14% │
+│ [bench/vec_bench.ml:Make_tests:Vec] fold_left             │  3_512.35ns │     21.00w │            │           │      6.94% │
+│ [bench/vec_bench.ml:Make_tests:Vec] hd_exn                │      2.91ns │            │            │           │            │
+│ [bench/vec_bench.ml:Make_tests:Vec] last_exn              │      4.13ns │            │            │           │            │
+│ [bench/vec_bench.ml:Make_tests:Vec] append                │  2_575.10ns │  1_664.00w │      9.59w │     9.59w │      5.09% │
+│ [bench/vec_bench.ml:Make_tests:Vec] concat wide           │ 46_191.12ns │ 15_218.00w │    860.12w │   860.12w │     91.32% │
+│ [bench/vec_bench.ml:Make_tests:Vec] concat narrow         │ 26_710.08ns │ 13_871.00w │    709.81w │   709.81w │     52.81% │
+└───────────────────────────────────────────────────────────┴─────────────┴────────────┴────────────┴───────────┴────────────┘
 
 Hardware Overview:
 

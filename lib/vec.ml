@@ -189,7 +189,13 @@ let of_list (type a) (l : a list) : a t =
   |> Spine.Builder.to_spine ~dim
 ;;
 
-let of_sequence s = Sequence.fold s ~init:empty ~f:snoc
+let of_sequence s =
+  Sequence.fold
+    (opaque_magic s : any Sequence.t)
+    ~init:Spine.Builder.empty
+    ~f:Spine.Builder.add
+  |> Spine.Builder.to_spine ~dim
+;;
 
 let of_array (type a) (a : a array) : a t =
   Spine.Builder.(add_arr empty) (opaque_magic a : any array)
