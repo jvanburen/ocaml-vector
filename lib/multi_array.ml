@@ -9,7 +9,7 @@ module Dim = struct
     | Z : elt t
     | S : int * 'a t -> 'a array t
 
-  let max_width = 3
+  let max_width = 32
   let one = S (1, Z)
   let cols (type a) (S (c, _) : a array t) : int = c
   let next (type a) (S (i, _) as t : a array t) = S (max_width * i, t)
@@ -61,16 +61,16 @@ let rec fold_left :
 ;;
 
 let rec fold_right :
-          't 'acc. 't -> init:'acc -> f:(elt -> 'acc -> 'acc) -> dim:'t dim -> 'acc
+          't 'acc. 't -> f:(elt -> 'acc -> 'acc) -> init:'acc -> dim:'t dim -> 'acc
   =
-  fun (type t acc) (t : t) ~(init : acc) ~(f : elt -> acc -> acc) ~(dim : t dim) : acc ->
+  fun (type t acc) (t : t) ~(f : elt -> acc -> acc) ~(init : acc) ~(dim : t dim) : acc ->
    match dim with
    | Z -> f t init
-   | S (_, Z) -> ArrayLabels.fold_right t ~init ~f
+   | S (_, Z) -> ArrayLabels.fold_right t ~f ~init
    | S (_, dim) ->
      let init = ref init in
      for i = Array.length t - 1 downto 0 do
-       init := fold_right (Array.unsafe_get t i) ~init:!init ~f ~dim
+       init := fold_right (Array.unsafe_get t i) ~f ~init:!init ~dim
      done;
      !init
 ;;

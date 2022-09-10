@@ -47,8 +47,8 @@ let fold_left (t : 'a t) ~(init : 'acc) ~(f : 'acc -> 'a -> 'acc) =
   Spine.fold_left t ~init ~f:(opaque_magic f : 'acc -> any -> 'acc) ~dim
 ;;
 
-let fold_right (t : 'a t) ~(init : 'acc) ~(f : 'a -> 'acc -> 'acc) =
-  Spine.fold_right t ~init ~f:(opaque_magic f : any -> 'acc -> 'acc) ~dim
+let fold_right (t : 'a t) ~(f : 'a -> 'acc -> 'acc) ~(init : 'acc) =
+  Spine.fold_right t ~f:(opaque_magic f : any -> 'acc -> 'acc) ~init ~dim
 ;;
 
 let to_list t = fold_right t ~init:[] ~f:List.cons

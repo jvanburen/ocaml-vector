@@ -205,20 +205,20 @@ let rec fold_left :
 
 let rec fold_right :
           'a 'acc.
-          'a array t -> init:'acc -> f:(elt -> 'acc -> 'acc) -> dim:'a array dim -> 'acc
+          'a array t -> f:(elt -> 'acc -> 'acc) -> init:'acc -> dim:'a array dim -> 'acc
   =
   fun (type a acc)
       (t : a array t)
-      ~(init : acc)
       ~(f : elt -> acc -> acc)
+      ~(init : acc)
       ~(dim : a array dim)
     : acc ->
    match t with
-   | Base b -> Multi_array.fold_right b.data ~init ~f ~dim
+   | Base b -> Multi_array.fold_right b.data ~f ~init ~dim
    | Spine s ->
-     let init = Multi_array.fold_right s.suffix ~init ~f ~dim in
-     let init = fold_right s.data ~init ~f ~dim:(next dim) in
-     Multi_array.fold_right s.prefix ~init ~f ~dim
+     let init = Multi_array.fold_right s.suffix ~f ~init ~dim in
+     let init = fold_right s.data ~f ~init ~dim:(next dim) in
+     Multi_array.fold_right s.prefix ~f ~init ~dim
 ;;
 
 module To_array = struct

@@ -1,6 +1,6 @@
 (library
   (name vec)
-  (libraries core expect_test_helpers_core)
+  (libraries base expect_test_helpers_core)
   (inline_tests)
   (preprocess (pps ppx_jane))
 )
