@@ -22,6 +22,7 @@ module Make_tests (M : sig
   (* val set : 'a t -> int -> 'a -> 'a t *)
 
   val map : 'a t -> f:('a -> 'b) -> 'b t
+  val filter : 'a t -> f:('a -> bool) -> 'a t
   val init : int -> f:(int -> 'a) -> 'a t
   val get : 'a t -> int -> 'a
   val cons : 'a -> 'a t -> 'a t
@@ -76,7 +77,7 @@ struct
 
              let%bench "cons 10" =
                let m = ref strings in
-               for i = 0 to 9 do
+               for _ = 0 to 9 do
                  m := M.cons "front" !m
                done;
                !m
@@ -84,7 +85,9 @@ struct
            end : Empty))
 
   let%bench "of_sequence" = M.of_sequence string_seq
-  let%bench "map" = M.map strings ~f:Fn.id
+  let%bench "map once" = M.map strings ~f:Fn.id
+  let%bench "map x3" = strings |> M.map ~f:Fn.id |> M.map ~f:Fn.id |> M.map ~f:Fn.id
+  let%bench "filter" = ints |> M.filter ~f:(fun i -> i % 3 = 0)
   let%bench "fold_right" = M.fold_right ints ~init:0 ~f:( + )
   let%bench "fold_left" = M.fold_left ints ~init:0 ~f:( + )
   let%bench "hd_exn" = M.hd_exn strings

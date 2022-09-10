@@ -98,7 +98,16 @@ let rec map : 't. 't -> f:(elt -> elt) -> dim:'t dim -> 't =
   fun (type t) (t : t) ~(f : elt -> elt) ~(dim : t dim) : t ->
    match kind dim with
    | One -> Array.map t ~f
-   | Many -> Array.map t ~f:(fun t -> map t ~f ~dim:(inner dim))
+   | Many ->
+     (match Array.length t with
+      | 0 -> t
+      | len ->
+        let fst = map t.(0) ~f ~dim:(inner dim) in
+        let dst = Array.create fst ~len in
+        for i = 1 to len - 1 do
+          dst.(i) <- map t.(i) ~f ~dim:(inner dim)
+        done;
+        dst)
 ;;
 
 let rec rev : 't. 't -> dim:'t dim -> 't =
