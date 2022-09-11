@@ -1,4 +1,22 @@
-open! Base
+open! Core
+
+let rec obj_to_sexp o =
+  let tag = Obj.tag o in
+  assert (tag <> Obj.unaligned_tag);
+  if tag = Obj.int_tag
+  then [%sexp (Obj.obj o : int)]
+  else if tag = Obj.double_tag
+  then [%sexp (Obj.obj o : float)]
+  else if tag = Obj.double_array_tag
+  then [%sexp (Obj.obj o : float array)]
+  else if tag = Obj.string_tag
+  then [%sexp (Obj.obj o : string)]
+  else
+    Sexp.List
+      (if tag < Obj.no_scan_tag
+      then List.init (Obj.size o) ~f:(fun i -> obj_to_sexp (Obj.field o i))
+      else List.init (Obj.size o) ~f:(fun i -> [%sexp (Obj.raw_field o i : nativeint)]))
+;;
 
 type elt = private
   | Immediate
@@ -36,19 +54,31 @@ type 'a dim = 'a Dim.t
 
 let cols = Dim.cols
 let next = Dim.next
-let empty = { size = 0; prefix_sizes = [||]; storage = [||] }
+let empty = Obj.magic { size = 0; prefix_sizes = [| 0 |]; storage = [||] }
 
 let rec get : 't. 't node -> int -> dim:'t node dim -> elt =
   fun (type t) (t : t node) (i : int) ~(dim : t node dim) : elt ->
    match dim with
-   | One _ -> t.storage.(i)
+   | One _ ->
+     Exn.reraise_uncaught
+       (sprintf !"get t.storage.(%d) = %{Sexp#mach}" i (obj_to_sexp (Obj.repr t.storage)))
+       (fun () -> t.storage.(i))
    | S (cols, dim) ->
      let j = ref (i / cols) in
-     while t.prefix_sizes.(!j) < i do
-       Int.incr j
-     done;
-     let next = t.storage.(!j) in
-     get next (i - t.prefix_sizes.(!j)) ~dim
+     let offset = ref t.prefix_sizes.(!j) in
+     Exn.reraise_uncaught "size index" (fun () ->
+       while t.prefix_sizes.(!j + 1) <= i do
+         offset := t.prefix_sizes.(!j + 1);
+         Int.incr j
+       done);
+     Exn.reraise_uncaught
+       (sprintf
+          "get t.storage.(%d) at %d out of %d. t.prefix_sizes.(!j)=%d"
+          !j
+          (i - !offset)
+          t.size
+          t.prefix_sizes.(!j))
+       (fun () -> get t.storage.(!j) (i - !offset) ~dim)
 ;;
 
 let rec set : 't. 't node -> int -> dim:'t node dim -> elt -> 't node =
@@ -102,23 +132,29 @@ let rec map : 't. 't node -> f:('a -> 'b) -> dim:'t node dim -> 't node =
    | S (_, dim) -> { t with storage = Array.map t.storage ~f:(fun t -> map t ~f ~dim) }
 ;;
 
+let length t = t.size
+
 let rec actual_len : 't. 't node -> dim:'t node dim -> int =
   let open Base in
   fun (type t) (t : t node) ~(dim : t node dim) : int ->
     let len =
       match dim with
-      | One _ -> Array.length t.storage
+      | One one ->
+        assert (one = 1);
+        Array.length t.storage
       | S (cols, dim) ->
-        Array.fold2_exn t.storage t.prefix_sizes ~init:0 ~f:(fun acc t prefix_sum ->
-          [%test_result: int] prefix_sum ~expect:acc;
-          let len = actual_len t ~dim in
-          assert (len < cols);
+        Array.foldi t.storage ~init:0 ~f:(fun i acc t' ->
+          [%test_result: int] t.prefix_sizes.(i) ~expect:acc;
+          let len = actual_len t' ~dim in
+          assert (len <= cols);
           acc + len)
     in
     [%test_result: int] len ~expect:t.size;
+    [%test_result: int] t.prefix_sizes.(Array.length t.storage) ~expect:t.size;
     len
 ;;
 
+(* TODO: we can cache the length arrays for fully-filled nodes *)
 let cons (type t) (x : t) (t : t node) ~(dim : t node dim) : t node =
   let new_size =
     match dim with
@@ -143,7 +179,8 @@ let snoc (type t) (t : t node) (x : t) ~(dim : t node dim) : t node =
     | One _ -> 1
     | S _ -> x.size
   in
-  let prefix_sizes = Array.create t.size ~len:(Array.length t.prefix_sizes + 1) in
+  let size = t.size + new_size in
+  let prefix_sizes = Array.create size ~len:(Array.length t.prefix_sizes + 1) in
   Array.blit
     ~src:t.prefix_sizes
     ~src_pos:0
@@ -157,7 +194,7 @@ let snoc (type t) (t : t node) (x : t) ~(dim : t node dim) : t node =
     ~dst:storage
     ~dst_pos:0
     ~len:(Array.length t.storage);
-  { size = t.size + new_size; prefix_sizes; storage }
+  { size; prefix_sizes; storage }
 ;;
 
 let singleton x ~dim = cons x empty ~dim

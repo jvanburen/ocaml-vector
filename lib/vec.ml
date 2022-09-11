@@ -7,9 +7,10 @@ module View = struct
 end
 
 type any = Multi_array.elt
-type +'a t = any array Spine.t
+type 'a node = 'a Multi_array.node [@@deriving sexp_of]
+type +'a t = any node Spine.t
 
-let dim : any array Multi_array.Dim.t = Multi_array.Dim.one
+let dim : any node Multi_array.Dim.t = Multi_array.Dim.one
 
 external of_any : any -> 'a = "%opaque"
 external to_any : 'a -> any = "%opaque"
@@ -41,8 +42,6 @@ let map (type a b) (t : a t) ~(f : a -> b) : b t =
   Spine.map t ~f:(opaque_magic f : any -> any) ~dim
 ;;
 
-let rev (type a) (t : a t) : a t = Spine.rev t ~dim
-
 let fold_left (t : 'a t) ~(init : 'acc) ~(f : 'acc -> 'a -> 'acc) =
   Spine.fold_left t ~init ~f:(opaque_magic f : 'acc -> any -> 'acc) ~dim
 ;;
@@ -51,6 +50,7 @@ let fold_right (t : 'a t) ~(init : 'acc) ~(f : 'a -> 'acc -> 'acc) =
   Spine.fold_right t ~init ~f:(opaque_magic f : any -> 'acc -> 'acc) ~dim
 ;;
 
+let rev (type a) (t : a t) : a t = fold_left t ~init:empty ~f:(Fn.flip cons)
 let to_list t = fold_right t ~init:[] ~f:List.cons
 
 let to_sequence (type a) (t : a t) : a Sequence.t =
@@ -264,16 +264,19 @@ let%test_module _ =
     open! Core
     open Expect_test_helpers_core
 
-    type int_elt = any
+    type 'a debug = 'a t
 
-    let sexp_of_int_elt any = [%sexp (of_any any : int)]
-
-    type debug = int_elt array Spine.t [@@deriving sexp_of]
+    let sexp_of_debug (type a) (sexp_of_a : a -> Sexp.t) (t : a debug) =
+      let sexp_of_any : any -> Sexp.t = Obj.magic sexp_of_a in
+      [%sexp (t : any node Spine.t)]
+    ;;
 
     let test_result t ~expect =
-      Invariant.invariant [%here] t [%sexp_of: debug] (fun () ->
+      Invariant.invariant [%here] t [%sexp_of: int debug] (fun () ->
         [%test_result: int] (length t) ~expect:(List.length expect);
-        List.iteri expect ~f:(fun i expect -> [%test_result: int] (get t i) ~expect))
+        List.iteri expect ~f:(fun i expect ->
+          Exn.reraise_uncaught (Int.to_string i) (fun () ->
+            [%test_result: int] (get t i) ~expect)))
     ;;
 
     let check t =
@@ -331,46 +334,52 @@ let%test_module _ =
       [%expect {||}]
     ;;
 
-    let%expect_test "of_list" =
+    let%expect_test "snoc" =
       let (_ : int t) =
-        List.fold [ 0; 1; 2; 3; 4; 5 ] ~init:empty ~f:(fun t x ->
+        List.fold [ "a"; "b"; "c"; "d"; "e"; "f" ] ~init:empty ~f:(fun t x ->
           let t = snoc t x in
           check t;
-          print_s [%sexp (t : debug)];
+          print_s [%sexp (t : string debug)];
           t)
       in
       [%expect
         {|
-        ((len 1) (data (0)))
-        ((prefix (0))
+        ((size 1) (prefix_sizes (0 1)) (storage (a)))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (a))))
          (prefix_len 1)
-         (data ((len 0) (data ())))
+         (data ((size 0) (prefix_sizes (0)) (storage ())))
          (data_len 0)
-         (suffix (1))
+         (suffix ((size 1) (prefix_sizes (0 1)) (storage (b))))
          (suffix_len 1))
-        ((prefix (0))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (a))))
          (prefix_len 1)
-         (data ((len 0) (data ())))
+         (data ((size 0) (prefix_sizes (0)) (storage ())))
          (data_len 0)
-         (suffix (1 2))
+         (suffix ((size 2) (prefix_sizes (0 1 2)) (storage (b c))))
          (suffix_len 2))
-        ((prefix (0))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (a))))
          (prefix_len 1)
-         (data ((len 0) (data ())))
+         (data ((size 0) (prefix_sizes (0)) (storage ())))
          (data_len 0)
-         (suffix (1 2 3))
+         (suffix ((size 3) (prefix_sizes (0 1 2 3)) (storage (b c d))))
          (suffix_len 3))
-        ((prefix (0))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (a))))
          (prefix_len 1)
-         (data ((len 3) (data ((1 2 3)))))
+         (data (
+           (size 3)
+           (prefix_sizes (0 3))
+           (storage (((size 3) (prefix_sizes (0 1 2 3)) (storage (b c d)))))))
          (data_len 3)
-         (suffix (4))
+         (suffix ((size 1) (prefix_sizes (0 1)) (storage (e))))
          (suffix_len 1))
-        ((prefix (0))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (a))))
          (prefix_len 1)
-         (data ((len 3) (data ((1 2 3)))))
+         (data (
+           (size 3)
+           (prefix_sizes (0 3))
+           (storage (((size 3) (prefix_sizes (0 1 2 3)) (storage (b c d)))))))
          (data_len 3)
-         (suffix (4 5))
+         (suffix ((size 2) (prefix_sizes (0 1 2)) (storage (e f))))
          (suffix_len 2)) |}]
     ;;
 
@@ -379,27 +388,37 @@ let%test_module _ =
     let%expect_test "t" =
       check t;
       [%test_result: int] (length t) ~expect:20;
-      print_s [%sexp (t : debug)];
+      print_s [%sexp (t : int debug)];
       [%expect
         {|
-        ((prefix (1))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (1))))
          (prefix_len 1)
          (data (
-           (prefix ((2 3 4)))
+           (prefix (
+             (size 3)
+             (prefix_sizes (0 3))
+             (storage (((size 3) (prefix_sizes (0 1 2 3)) (storage (2 3 4)))))))
            (prefix_len 3)
            (data (
-             (len 9)
-             (data ((
-               (5  6  7)
-               (8  9  10)
-               (11 12 13))))))
+             (size 9)
+             (prefix_sizes (0 9))
+             (storage ((
+               (size 9)
+               (prefix_sizes (0 3 6 9))
+               (storage (
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (5 6 7)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (8 9 10)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (11 12 13))))))))))
            (data_len 9)
            (suffix (
-             (14 15 16)
-             (17 18 19)))
+             (size 6)
+             (prefix_sizes (0 3 6))
+             (storage (
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (14 15 16)))
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (17 18 19)))))))
            (suffix_len 6)))
          (data_len 18)
-         (suffix (20))
+         (suffix ((size 1) (prefix_sizes (0 1)) (storage (20))))
          (suffix_len 1)) |}]
     ;;
 
@@ -414,107 +433,73 @@ let%test_module _ =
     ;;
 
     let%expect_test "set" =
-      print_s [%sexp (set t 0 1337 : debug)];
+      print_s [%sexp (set t 0 1337 : int debug)];
       [%expect
         {|
-        ((prefix (1337))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (1337))))
          (prefix_len 1)
          (data (
-           (prefix ((2 3 4)))
+           (prefix (
+             (size 3)
+             (prefix_sizes (0 3))
+             (storage (((size 3) (prefix_sizes (0 1 2 3)) (storage (2 3 4)))))))
            (prefix_len 3)
            (data (
-             (len 9)
-             (data ((
-               (5  6  7)
-               (8  9  10)
-               (11 12 13))))))
+             (size 9)
+             (prefix_sizes (0 9))
+             (storage ((
+               (size 9)
+               (prefix_sizes (0 3 6 9))
+               (storage (
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (5 6 7)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (8 9 10)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (11 12 13))))))))))
            (data_len 9)
            (suffix (
-             (14 15 16)
-             (17 18 19)))
+             (size 6)
+             (prefix_sizes (0 3 6))
+             (storage (
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (14 15 16)))
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (17 18 19)))))))
            (suffix_len 6)))
          (data_len 18)
-         (suffix (20))
+         (suffix ((size 1) (prefix_sizes (0 1)) (storage (20))))
          (suffix_len 1)) |}]
     ;;
 
-    (* TODO: test [set] *)
-    (*     let%expect_test "set" = *)
-    (*       print_s [%sexp (t : debug)]; *)
-    (*       let l = Array.of_list (to_list t in       *)
-    (*       for i = 0 to length t - 1 do *)
-    (* let expect =  *)
-    (* k *)
-
-    (*   done *)
-    (*   List.init       *)
-    (*   print_elems t; *)
-    (*   [%expect *)
-    (*     {| *)
-    (*     ((prefix (1 2 3)) *)
-    (*      (prefix_len 3) *)
-    (*      (width      3) *)
-    (*      (data ( *)
-    (*        (prefix ( *)
-    (*          (4  5  6) *)
-    (*          (7  8  9) *)
-    (*          (10 11 12))) *)
-    (*        (prefix_len 9) *)
-    (*        (width      3) *)
-    (*        (data ((len 0) (data ()))) *)
-    (*        (data_len 0) *)
-    (*        (suffix ( *)
-    (*          (13 14 15) *)
-    (*          (16 17 18))) *)
-    (*        (suffix_len 6))) *)
-    (*      (data_len 15) *)
-    (*      (suffix (19 20)) *)
-    (*      (suffix_len 2)) *)
-    (*     ((0  (Ok 1)) *)
-    (*      (1  (Ok 2)) *)
-    (*      (2  (Ok 3)) *)
-    (*      (3  (Ok 4)) *)
-    (*      (4  (Ok 5)) *)
-    (*      (5  (Ok 6)) *)
-    (*      (6  (Ok 7)) *)
-    (*      (7  (Ok 8)) *)
-    (*      (8  (Ok 9)) *)
-    (*      (9  (Ok 10)) *)
-    (*      (10 (Ok 11)) *)
-    (*      (11 (Ok 12)) *)
-    (*      (12 (Ok 13)) *)
-    (*      (13 (Ok 14)) *)
-    (*      (14 (Ok 15)) *)
-    (*      (15 (Ok 16)) *)
-    (*      (16 (Ok 17)) *)
-    (*      (17 (Ok 18)) *)
-    (*      (18 (Ok 19)) *)
-    (*      (19 (Ok 20))) |}] *)
-    (* ;; *)
-
     let%expect_test "cons" =
       let t = cons 0 t in
-      print_s [%sexp (t : debug)];
+      print_s [%sexp (t : int debug)];
       [%expect
         {|
-        ((prefix (0 1))
+        ((prefix ((size 2) (prefix_sizes (0 1 2)) (storage (0 1))))
          (prefix_len 2)
          (data (
-           (prefix ((2 3 4)))
+           (prefix (
+             (size 3)
+             (prefix_sizes (0 3))
+             (storage (((size 3) (prefix_sizes (0 1 2 3)) (storage (2 3 4)))))))
            (prefix_len 3)
            (data (
-             (len 9)
-             (data ((
-               (5  6  7)
-               (8  9  10)
-               (11 12 13))))))
+             (size 9)
+             (prefix_sizes (0 9))
+             (storage ((
+               (size 9)
+               (prefix_sizes (0 3 6 9))
+               (storage (
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (5 6 7)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (8 9 10)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (11 12 13))))))))))
            (data_len 9)
            (suffix (
-             (14 15 16)
-             (17 18 19)))
+             (size 6)
+             (prefix_sizes (0 3 6))
+             (storage (
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (14 15 16)))
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (17 18 19)))))))
            (suffix_len 6)))
          (data_len 18)
-         (suffix (20))
+         (suffix ((size 1) (prefix_sizes (0 1)) (storage (20))))
          (suffix_len 1)) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
@@ -524,27 +509,37 @@ let%test_module _ =
 
     let%expect_test "snoc" =
       let t = snoc t 21 in
-      print_s [%sexp (t : debug)];
+      print_s [%sexp (t : int debug)];
       [%expect
         {|
-        ((prefix (1))
+        ((prefix ((size 1) (prefix_sizes (0 1)) (storage (1))))
          (prefix_len 1)
          (data (
-           (prefix ((2 3 4)))
+           (prefix (
+             (size 3)
+             (prefix_sizes (0 3))
+             (storage (((size 3) (prefix_sizes (0 1 2 3)) (storage (2 3 4)))))))
            (prefix_len 3)
            (data (
-             (len 9)
-             (data ((
-               (5  6  7)
-               (8  9  10)
-               (11 12 13))))))
+             (size 9)
+             (prefix_sizes (0 9))
+             (storage ((
+               (size 9)
+               (prefix_sizes (0 3 6 9))
+               (storage (
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (5 6 7)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (8 9 10)))
+                 ((size 3) (prefix_sizes (0 1 2 3)) (storage (11 12 13))))))))))
            (data_len 9)
            (suffix (
-             (14 15 16)
-             (17 18 19)))
+             (size 6)
+             (prefix_sizes (0 3 6))
+             (storage (
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (14 15 16)))
+               ((size 3) (prefix_sizes (0 1 2 3)) (storage (17 18 19)))))))
            (suffix_len 6)))
          (data_len 18)
-         (suffix (20 21))
+         (suffix ((size 2) (prefix_sizes (0 1 2)) (storage (20 21))))
          (suffix_len 2)) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
