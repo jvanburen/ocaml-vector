@@ -133,6 +133,7 @@ let rec map : 't. 't node -> f:('a -> 'b) -> dim:'t node dim -> 't node =
 ;;
 
 let length t = t.size
+let width t = Array.length t.storage
 
 let rec actual_len : 't. 't node -> dim:'t node dim -> int =
   let open Base in

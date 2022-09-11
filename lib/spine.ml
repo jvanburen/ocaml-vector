@@ -1,5 +1,8 @@
 open! Core
 
+(* TODO: rename multi_array -> tree *)
+module Tree = Multi_array
+
 type elt = Multi_array.elt
 type 'a node = 'a Multi_array.node [@@deriving sexp_of]
 
@@ -147,6 +150,38 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
          ; suffix_len = suffix.size
          ; suffix
          })
+;;
+
+let rec append_tree_length : 'a. 'a node -> 'a node  node -> dim:'a node dim -> int array =
+  fun (type a) (t1 : a node) (t2 : a node node) ~(dim : a node dim) : int array ->
+  match dim with
+  | One _ ->
+    let total_width = Tree.width t1 + Tree.width t2 in
+    if total_width <= max_width then [| total_width|] else [| max_width; total_width - max_width|]
+  | Many (_, dim) ->
+
+let s1 = 
+
+    let dst = Array.create 0 ~len:() in
+    Array.blito ~src:t1.prefix_sizes ~dst;
+    let last_size = ref (Tree.width t1) in
+    let dst = ref (Tree.width t1) in
+
+
+  (*   let rec append_trees : 'a. 'a node -> 'a node -> dim:'a node dim -> 'a node t = *)
+  (* fun (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim) : a node t -> *)
+  (* match dim with *)
+  (* | One _ -> *)
+
+
+
+
+;;
+
+let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
+  fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t ->
+   match t1, t2 with
+   | Base b1, Base b2 -> append_trees b1 b2 ~dim
 ;;
 
 let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
