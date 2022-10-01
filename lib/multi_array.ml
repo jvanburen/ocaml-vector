@@ -62,6 +62,7 @@ let next = Dim.next
 let empty = Obj.magic { size = 0; prefix_sizes = [| 0 |]; storage = [||] }
 let max_width = Dim.max_width
 let min_width = Dim.max_width - 1
+let increasing = Array.init (max_width + 1) ~f:Fn.id
 
 let rec get : 't. 't node -> int -> dim:'t node dim -> elt =
   fun (type t) (t : t node) (i : int) ~(dim : t node dim) : elt ->
@@ -141,25 +142,7 @@ let rec map : 't. 't node -> f:('a -> 'b) -> dim:'t node dim -> 't node =
 
 let length t = t.size
 
-(* let flat_append (type a) (w1 : a wide) (w2 : a wide) : a wide = *)
-(*   match width w1, width w2 with *)
-(*   | _, 0 -> w1 *)
-(*   | 0, _ -> w2 *)
-(*   | w1, w2 -> *)
-(*     let sizes = Array.create 0 ~len:(w1 + w2 + 1) in *)
-(*     Array.blito ~src:t1.prefix_sizes ~dst:sizes (); *)
-(*     Array.iteri t2.prefix_sizes ~f:(fun i s -> sizes.(w1 + i) <- s + t1.size); *)
-(*     { wide = *)
-(*         { size = t1.size + t2.size *)
-(*         ; prefix_sizes = sizes *)
-(*         ; storage = Array.append t1.storage t2.storage *)
-(*         } *)
-(*     } *)
-(* ;; *)
-
-(* TODO: use the sizes to construct the new node without so much copying *)
-(* TODO: this should allow the sub-nodes to vary in size down to min_width *)
-(* let evenly_distribute (type a) (t : a node node) : a node node = *)
+(* let evenly_distribute (type a) (t : a node) : a node = *)
 (*   let flat = *)
 (*     Array.concat_map t.storage ~f:(fun t -> *)
 (*       Array.mapi t.storage ~f:(fun i elt -> *)
@@ -244,6 +227,73 @@ let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
           done;
           Array.blito ~src:w2 ~dst ~src_pos:!src_pos ~dst_pos:!dst_pos ();
           dst))
+;;
+
+let compute_prefix_sizes nodes =
+  let sizes = Array.create 0 ~len:(width nodes + 1) in
+  Array.iteri nodes ~f:(fun i node -> sizes.(i + 1) <- sizes.(i) + node.size);
+  sizes
+;;
+
+let append (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim)
+  : (a node, a node * a node) Either.t
+  =
+  match dim with
+  | One _ ->
+    (match Array.length t1.storage, Array.length t2.storage with
+     | _, 0 -> First t1
+     | 0, _ -> First t2
+     | w1, w2 ->
+       if w1 > min_width
+       then Second (t1, t2)
+       else if w1 + w2 <= max_width
+       then (
+         let sizes = Array.create 0 ~len:(w1 + w2 + 1) in
+         Array.blito ~src:t1.prefix_sizes ~dst:sizes ();
+         Array.iteri t2.prefix_sizes ~f:(fun i s -> sizes.(w1 + i) <- s + t1.size);
+         First
+           { size = t1.size + t2.size
+           ; prefix_sizes = sizes
+           ; storage = Array.append t1.storage t2.storage
+           })
+       else (
+         let max_width = (w1 + w2) / 2 in
+         let lhs = Array.create t1.storage.(0) ~len:max_width in
+         Array.blito ~src:t1.storage ~dst:lhs ();
+         Array.blit ~src:t2.storage ~dst:lhs ~src_pos:0 ~dst_pos:w1 ~len:(max_width - w1);
+         let lhs = { size = max_width; prefix_sizes = increasing; storage = lhs } in
+         let rhs =
+           let size = w2 - (max_width - w1) in
+           { size
+           ; prefix_sizes = Array.subo increasing ~len:(size + 1)
+           ; storage = Array.subo t2.storage ~pos:(max_width - w1)
+           }
+         in
+         Second (lhs, rhs)))
+  | S (_, dim) ->
+    (* TODO: lots of ways to special case and avoid recomputing sizes *)
+    let appended = append t1.storage t2.storage ~dim in
+    let len = Array.length appended in
+    if len <= max_width
+    then (
+      let prefix_sizes = Array.create 0 ~len:(len + 1) in
+      Array.iteri appended ~f:(fun i node ->
+        prefix_sizes.(i + 1) <- prefix_sizes.(i) + node.size);
+      First { storage = appended; size = prefix_sizes.(len); prefix_sizes })
+    else (
+      assert (len <= max_width * 2);
+      let max_width = len / 2 in
+      let lhs =
+        let storage = Array.subo appended ~len:max_width in
+        let prefix_sizes = compute_prefix_sizes storage in
+        { size = prefix_sizes.(max_width); prefix_sizes; storage }
+      in
+      let rhs =
+        let storage = Array.subo appended ~pos:max_width in
+        let prefix_sizes = compute_prefix_sizes storage in
+        { size = prefix_sizes.(Array.length storage); prefix_sizes; storage }
+      in
+      Second (lhs, rhs))
 ;;
 
 let rec actual_len : 't. 't node -> dim:'t node dim -> int =

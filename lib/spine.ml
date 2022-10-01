@@ -3,7 +3,6 @@ open! Core
 (* TODO: rename multi_array -> tree *)
 module Tree = Multi_array
 
-
 type elt = Multi_array.elt
 type 'a node = 'a Multi_array.node [@@deriving sexp_of]
 
@@ -153,53 +152,68 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
          })
 ;;
 
-let rec append_tree_widths : 'a. 'a node -> 'a node  -> dim:'a node dim -> 'a node =
-  fun (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim) : a node ->
-  let w1 = Tree.width t1
-      and w2 = Tree.width t2 in
-  match dim with
-  | One _ ->
-    let total_width = Tree.width t1 + Tree.width t2 in
-    if total_width <= max_width then [| total_width |] else [| max_width; total_width - max_width|]
-  | Many (_, dim) ->
-    if Array.is_empty t1.storage then t2.prefix_sizes 
-    else if Array.is_empty t2.storage then t1.prefix_sizes else
-      let sizes = Array.create 0 ~len:(w1 + w2) in
-      Array.blito ~src:t1.prefix_sizes ~dst:sizes();
-      let dst_pos = ref w1 in
-      let last_size = ref (Tree.length t1) in
-      let last_width = ref (Tree.width t1.storage.(Tree.width t1 - 1)) in
-      for i = 0 to Tree.width t2 - 1 do
-        let w = Tree.width t2.storage.(i) in
-        if !last_width + w > max_width then (
-          sizes.(!dst_pos) <- last_size +
-          last_width := !last_width + w - max_width;
-        )
-      done
-      Array.iteri t2.storage ~f:()
-      while !src_pos < Tree.width t2 do
-        
+(* let rec append_tree_widths : 'a. 'a node -> 'a node  -> dim:'a node dim -> 'a node = *)
+(*   fun (type a) (t1 : a Tree.wide) (t2 : a Tree.wide) ~(dim : a node dim) : a node -> *)
+(*   let w1 = Tree.width t1 *)
+(*   and w2 = Tree.width t2 in *)
+(*   match dim with *)
+(*   | One _ -> *)
+(*     let total_width = Tree.width t1 + Tree.width t2 in *)
+(*     if total_width <= max_width then [| total_width |] else [| max_width; total_width - max_width|] *)
+(*   | Many (_, dim) -> *)
+(*     if Array.is_empty t1.storage then t2.prefix_sizes  *)
+(*     else if Array.is_empty t2.storage then t1.prefix_sizes else *)
+(*       let sizes = Array.create 0 ~len:(w1 + w2) in *)
+(*       Array.blito ~src:t1.prefix_sizes ~dst:sizes(); *)
+(*       let dst_pos = ref w1 in *)
+(*       let last_size = ref (Tree.length t1) in *)
+(*       let last_width = ref (Tree.width t1.storage.(Tree.width t1 - 1)) in *)
+(*       for i = 0 to Tree.width t2 - 1 do *)
+(*         let w = Tree.width t2.storage.(i) in *)
+(*         if !last_width + w > max_width then ( *)
+(*           sizes.(!dst_pos) <- last_size + *)
+(*           last_width := !last_width + w - max_width; *) 
+(*         ) *)
+(*       done *)
 
-      let dst = Array.create 0 ~len:() in
-    Array.blito ~src:t1.prefix_sizes ~dst;
-    let last_size = ref (Tree.width t1) in
-    let dst = ref (Tree.width t1) in
+(*       Array.iteri t2.storage ~f:() *)
+(*       while !src_pos < Tree.width t2 do *)
 
+(*       let dst = Array.create 0 ~len:() in *)
+(*     Array.blito ~src:t1.prefix_sizes ~dst; *)
+(*     let last_size = ref (Tree.width t1) in *)
+(*     let dst = ref (Tree.width t1) in *)
 
-  (*   let rec append_trees : 'a. 'a node -> 'a node -> dim:'a node dim -> 'a node t = *)
-  (* fun (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim) : a node t -> *)
-  (* match dim with *)
-  (* | One _ -> *)
+(*   (\*   let rec append_trees : 'a. 'a node -> 'a node -> dim:'a node dim -> 'a node t = *\) *)
+(*   (\* fun (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim) : a node t -> *\) *)
+(*   (\* match dim with *\) *)
+(*   (\* | One _ -> *\) *)
 
-
-
-
-;;
+(* ;; *)
 
 let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
   fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t ->
    match t1, t2 with
-   | Base b1, Base b2 -> append_trees b1 b2 ~dim
+   | Base b1, Base b2 ->
+     (match Tree.append b1 b2 ~dim ~max_width with
+      | First b -> Base b
+      | Second (prefix, suffix) ->
+        Spine
+          { prefix_len = Tree.length prefix
+          ; prefix
+          ; data_len = 0
+          ; data = empty
+          ; suffix
+          ; suffix_len = Tree.length suffix
+          })
+   | Base b1, Spine s2 ->
+
+     (* TODO: make the RHS bigger than the RHS while merging *)
+     match Tree.append b1 s2.prefix ~dim  with
+
+
+
+
 ;;
 
 let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
