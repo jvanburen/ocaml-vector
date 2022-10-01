@@ -29,6 +29,11 @@ type 'a node =
   }
 [@@deriving sexp_of]
 
+(** may have length up to [2*max_width] *)
+type 'a wide = 'a node array
+
+let width (w : _ wide) = Array.length w
+
 module Dim = struct
   type _ t =
     | One : int -> elt node t
@@ -55,6 +60,8 @@ type 'a dim = 'a Dim.t
 let cols = Dim.cols
 let next = Dim.next
 let empty = Obj.magic { size = 0; prefix_sizes = [| 0 |]; storage = [||] }
+let max_width = Dim.max_width
+let min_width = Dim.max_width - 1
 
 let rec get : 't. 't node -> int -> dim:'t node dim -> elt =
   fun (type t) (t : t node) (i : int) ~(dim : t node dim) : elt ->
@@ -133,7 +140,111 @@ let rec map : 't. 't node -> f:('a -> 'b) -> dim:'t node dim -> 't node =
 ;;
 
 let length t = t.size
-let width t = Array.length t.storage
+
+(* let flat_append (type a) (w1 : a wide) (w2 : a wide) : a wide = *)
+(*   match width w1, width w2 with *)
+(*   | _, 0 -> w1 *)
+(*   | 0, _ -> w2 *)
+(*   | w1, w2 -> *)
+(*     let sizes = Array.create 0 ~len:(w1 + w2 + 1) in *)
+(*     Array.blito ~src:t1.prefix_sizes ~dst:sizes (); *)
+(*     Array.iteri t2.prefix_sizes ~f:(fun i s -> sizes.(w1 + i) <- s + t1.size); *)
+(*     { wide = *)
+(*         { size = t1.size + t2.size *)
+(*         ; prefix_sizes = sizes *)
+(*         ; storage = Array.append t1.storage t2.storage *)
+(*         } *)
+(*     } *)
+(* ;; *)
+
+(* TODO: use the sizes to construct the new node without so much copying *)
+(* TODO: this should allow the sub-nodes to vary in size down to min_width *)
+(* let evenly_distribute (type a) (t : a node node) : a node node = *)
+(*   let flat = *)
+(*     Array.concat_map t.storage ~f:(fun t -> *)
+(*       Array.mapi t.storage ~f:(fun i elt -> *)
+(*         t.prefix_sizes.(i + 1) - t.prefix_sizes.(i), elt)) *)
+(*   in *)
+(*   let flat_len = Array.length flat in *)
+(*   let storage = *)
+(*     Array.init *)
+(*       ((flat_len + Dim.max_width - 1) / Dim.max_width) *)
+(*       ~f:(fun i -> *)
+(*         let pos = i * Dim.max_width in *)
+(*         let len = pos - Int.min flat_len (pos + Dim.max_width) in *)
+(*         let sub = Array.sub flat ~pos ~len in *)
+(*         let prefix_sizes = Array.create 0 ~len:(len + 1) in *)
+(*         for i = 0 to len - 1 do *)
+(*           prefix_sizes.(i + 1) <- prefix_sizes.(i) + fst sub.(i) *)
+(*         done; *)
+(*         { storage = Array.map sub ~f:snd *)
+(*         ; prefix_sizes *)
+(*         ; size = prefix_sizes.(Array.length sub) *)
+(*         }) *)
+(*   in *)
+(*   let len = Array.length storage in *)
+(*   let prefix_sizes = Array.create 0 ~len:(len + 1) in *)
+(*   for i = 0 to len - 1 do *)
+(*     prefix_sizes.(i + 1) <- prefix_sizes.(i) + storage.(i).size *)
+(*   done; *)
+(*   { storage; prefix_sizes; size = prefix_sizes.(len) } *)
+(* ;; *)
+
+(** peel a non-wide node off the front of a wide node *)
+let lsplit2_wide (type a) (w : a wide) : a node node * a wide =
+  let len = Int.min max_width (width w) in
+  let storage = Array.subo w ~len in
+  let prefix_sizes = Array.create 0 ~len:(len + 1) in
+  Array.iteri storage ~f:(fun i node ->
+    prefix_sizes.(i + 1) <- prefix_sizes.(i) + node.size);
+  let t = { storage; prefix_sizes; size = prefix_sizes.(len) } in
+  t, Array.subo w ~pos:len
+;;
+
+(** post-increment *)
+let ( .++() ) r amount =
+  let pre = !r in
+  r := pre + amount;
+  pre
+;;
+
+(* TODO: use the sizes to construct the new node without so much copying *)
+
+let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
+  fun (type a) (w1 : a wide) (w2 : a wide) ~(dim : a node dim) : a wide ->
+   match dim with
+   | One _ -> Array.append w1 w2
+   | S (_, dim) ->
+     (match width w1, width w2 with
+      | _, 0 -> w1
+      | 0, _ -> w2
+      | prefix_len, src_len ->
+        let src = w2 in
+        let src_pos = ref 0 in
+        let dst_pos = ref (prefix_len - 1) in
+        let next = ref w1.(!dst_pos).storage in
+        if width !next >= min_width
+        then Array.append w1 w2
+        else (
+          (* TODO: the length of [storage] can be determined in advance *)
+          let len =
+            let last = src.(src_len - 1).storage in
+            prefix_len - 1 + src_len + Bool.to_int (width !next + width last >= max_width)
+          in
+          let dst = Array.create empty ~len in
+          Array.blit ~src:w1 ~dst ~src_pos:0 ~dst_pos:0 ~len:!dst_pos;
+          while width !next > 0 do
+            (* TODO: pretty sure this only needs to be an [if] *)
+            while width !next < min_width && !src_pos < src_len do
+              next := append !next w2.(src_pos.++(1)).storage ~dim
+            done;
+            let l, r = lsplit2_wide !next in
+            dst.(dst_pos.++(1)) <- l;
+            next := r
+          done;
+          Array.blito ~src:w2 ~dst ~src_pos:!src_pos ~dst_pos:!dst_pos ();
+          dst))
+;;
 
 let rec actual_len : 't. 't node -> dim:'t node dim -> int =
   let open Base in
