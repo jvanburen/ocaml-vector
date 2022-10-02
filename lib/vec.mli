@@ -6,6 +6,7 @@ module Lexicographic : sig
   type nonrec 'a t = 'a t [@@deriving compare]
 end
 
+include Invariant.S1 with type 'a t := 'a t
 include Indexed_container.S1 with type 'a t := 'a t
 include Quickcheckable.S1 with type 'a t := 'a t
 include Monad.S with type 'a t := 'a t

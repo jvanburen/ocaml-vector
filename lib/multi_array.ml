@@ -219,12 +219,6 @@ let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
           dst))
 ;;
 
-(* let compute_prefix_sizes nodes = *)
-(*   let sizes = Array.create 0 ~len:(width nodes + 1) in *)
-(*   Array.iteri nodes ~f:(fun i node -> sizes.(i + 1) <- sizes.(i) + node.size); *)
-(*   sizes *)
-(* ;; *)
-
 let append (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim)
   : (a node, a node * a node) Either.t
   =
@@ -397,4 +391,26 @@ let to_sequence (type t) (t : t node) ~(dim : t node dim) : elt Sequence.t =
     match finger with
     | Top -> Done
     | Finger { pos; arr; _ } as f -> Yield (arr.storage.(pos), next_finger f ~dim:Dim.one))
+;;
+
+let rec invariant : 't. 't -> dim:'t dim -> unit =
+  fun (type t) (t : t) ~(dim : t dim) : unit ->
+   match dim with
+   | One _ -> [%test_result: int] t.size ~expect:(Array.length t.storage)
+   | S (_, dim) ->
+     let width = Array.length t.storage in
+     if not (Int.between width ~low:min_width ~high:max_width)
+     then
+       raise_s
+         [%sexp "badly sized level in tree", (obj_to_sexp (Obj.repr t.storage) : Sexp.t)];
+     Array.invariant (invariant ~dim) t.storage;
+     [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length)
+;;
+
+let invariant (type t) (t : t) ~(dim : t dim) =
+  match dim with
+  | One _ -> [%test_result: int] t.size ~expect:(Array.length t.storage)
+  | S (_, dim) ->
+    Array.invariant (invariant ~dim) t.storage;
+    [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length)
 ;;

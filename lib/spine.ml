@@ -44,6 +44,19 @@ let length (type a) (t : a t) =
   | Spine s -> s.size
 ;;
 
+let rec invariant : 'a. 'a node t -> dim:'a node dim -> unit =
+  fun (type a) (t : a node t) ~(dim : a node dim) : unit ->
+   match t with
+   | Base tree -> Tree.invariant tree ~dim
+   | Spine { size; prefix; data; suffix } ->
+     Tree.invariant prefix ~dim;
+     invariant data ~dim:(next dim);
+     Tree.invariant suffix ~dim;
+     [%test_result: int]
+       size
+       ~expect:(Tree.length prefix + length data + Tree.length suffix)
+;;
+
 let spine ~prefix ~data ~suffix =
   let size = Tree.length prefix + length data + Tree.length suffix in
   Spine { size; prefix; data; suffix }
@@ -353,31 +366,6 @@ let rec fold_right :
 (*                    ~next:(fun ~src_pos:_ ~dst:_ ~dst_pos:_ ~len:_ -> ()))) *)
 (*   ;; *)
 (* end *)
-
-let rec actual_len : 'arr. 'arr node t -> dim:'arr node dim -> int =
-  fun (type arr) (t : arr node t) ~(dim : arr node dim) : int ->
-   match t with
-   | Base data -> Multi_array.actual_len data ~dim
-   | Spine { size; (* prefix_len; data_len; suffix_len; *) prefix; suffix; data } ->
-     (* [%test_result: int] prefix_len ~expect:(Multi_array.actual_len prefix ~dim); *)
-     (* [%test_result: int] data_len ~expect:(actual_len data ~dim:(next dim)); *)
-     (* [%test_result: int] suffix_len ~expect:(Multi_array.actual_len suffix ~dim); *)
-
-     (* let len = prefix_len + data_len + suffix_len in *)
-     [%test_result: int]
-       size
-       ~expect:
-         (Tree.actual_len prefix ~dim
-         + actual_len data ~dim:(next dim)
-         + Tree.actual_len suffix ~dim);
-     assert (size > 0);
-     size
-;;
-
-let invariant t ~dim =
-  let expect = actual_len t ~dim in
-  [%test_result: int] (length t) ~expect
-;;
 
 (* TODO: re-implement this *)
 module Builder = struct

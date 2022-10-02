@@ -30,6 +30,11 @@ include Indexed_container.Make (struct
   let iteri = `Define_using_fold
 end)
 
+let invariant inv t =
+  Spine.invariant t ~dim;
+  iter t ~f:(opaque_magic inv : any -> unit)
+;;
+
 let empty = Spine.empty
 let is_empty (t : _ t) = Spine.length t = 0
 let get (t : 'a t) i : 'a = of_any (Spine.get t i ~dim)
@@ -172,8 +177,6 @@ let to_array t =
     dst
 ;;
 
-let invariant (t : _ t) = Spine.invariant t ~dim
-
 let sexp_of_t (sexp_of_a : 'a -> Sexp.t) (t : 'a t) =
   Sexp.List (fold_right t ~init:[] ~f:(fun a acc -> sexp_of_a a :: acc))
 ;;
@@ -274,7 +277,7 @@ let%test_module _ =
     ;;
 
     let check t =
-      invariant t;
+      invariant ignore t;
       test_result t ~expect:(to_list t)
     ;;
 
@@ -412,12 +415,10 @@ let%test_module _ =
       let l = init 10 ~f:succ in
       let r = init 10 ~f:(fun x -> x + 11) in
       print_s [%sexp (l : int debug)];
-      [%expect
-        {|
+      [%expect {|
         ((size 10) (storage (1 2 3 4 5 6 7 8 9 10))) |}];
       print_s [%sexp (r : int debug)];
-      [%expect
-        {|
+      [%expect {|
         ((size 10) (storage (11 12 13 14 15 16 17 18 19 20))) |}];
       print_s [%sexp (append l r : int debug)];
       [%expect
