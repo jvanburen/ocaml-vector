@@ -38,7 +38,7 @@ module Dim = struct
     | One : int -> elt node t
     | S : int * 'a node t -> 'a node node t
 
-  let max_width = 3
+  let max_width = 32
   let one = One 1
 
   let cols (type a) (t : a t) : int =
@@ -62,6 +62,7 @@ let empty = { size = 0; storage = [||] }
 let max_width = Dim.max_width
 let min_width = Dim.max_width - 1
 let increasing = Array.init (max_width + 1) ~f:Fn.id
+let ( @ ) = Array.append
 let ( += ) r x = r := !r + x
 let ( -= ) r x = r := !r - x
 
@@ -185,7 +186,7 @@ let lsplit2_wide (type a) (w : a wide) : a node node * a wide =
 let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
   fun (type a) (w1 : a wide) (w2 : a wide) ~(dim : a node dim) : a wide ->
    match dim with
-   | One _ -> Array.append w1 w2
+   | One _ -> w1 @ w2
    | S (_, dim) ->
      (match width w1, width w2 with
       | _, 0 -> w1
@@ -196,7 +197,7 @@ let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
         let dst_pos = ref (prefix_len - 1) in
         let next = ref w1.(!dst_pos).storage in
         if width !next >= min_width
-        then Array.append w1 w2
+        then w1 @ w2
         else (
           (* TODO: the length of [storage] can be determined in advance *)
           let len =
@@ -242,18 +243,18 @@ let append (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim)
          (* Array.iteri t2.prefix_sizes ~f:(fun i s -> sizes.(w1 + i) <- s + t1.size); *)
          First
            { size = t1.size + t2.size (* ; prefix_sizes = sizes *)
-           ; storage = Array.append t1.storage t2.storage
+           ; storage = t1.storage @ t2.storage
            }
        else (
-         let max_width = (w1 + w2) / 2 in
-         let lhs = Array.create t1.storage.(0) ~len:max_width in
-         Array.blito ~src:t1.storage ~dst:lhs ();
-         Array.blit ~src:t2.storage ~dst:lhs ~src_pos:0 ~dst_pos:w1 ~len:(max_width - w1);
+         let i = (w1 + w2) / 2 in
+         let both = t1.storage @ t2.storage in
+         let lhs = Array.subo both ~len:i in
+         let rhs = Array.subo both ~pos:i in
          let lhs = { size = max_width; (* prefix_sizes = increasing; *) storage = lhs } in
          let rhs =
            let size = w2 - (max_width - w1) in
            { size (* ; prefix_sizes = Array.subo increasing ~len:(size + 1) *)
-           ; storage = Array.subo t2.storage ~pos:(max_width - w1)
+           ; storage = rhs
            }
          in
          Second (lhs, rhs)))

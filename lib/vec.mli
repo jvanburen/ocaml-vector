@@ -37,7 +37,7 @@ val concat : 'a t t -> 'a t
 val concat_map : 'a t -> f:('a -> 'b t) -> 'b t
 val rev : 'a t -> 'a t
 val fold_left : 'a t -> init:'acc -> f:('acc -> 'a -> 'acc) -> 'acc
-val fold_right : 'a t -> init:'acc -> f:('a -> 'acc -> 'acc) -> 'acc
+val fold_right : 'a t -> f:('a -> 'acc -> 'acc) -> init:'acc -> 'acc
 val of_list : 'a list -> 'a t
 val to_list : 'a t -> 'a list
 val of_array : 'a array -> 'a t
