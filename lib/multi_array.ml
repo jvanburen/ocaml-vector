@@ -24,7 +24,6 @@ type elt = private
 
 type 'a node =
   { size : int
-  ; prefix_sizes : int array
   ; storage : 'a array (* TODO: uniform array *)
   }
 [@@deriving sexp_of]
@@ -59,10 +58,19 @@ type 'a dim = 'a Dim.t
 
 let cols = Dim.cols
 let next = Dim.next
-let empty = Obj.magic { size = 0; prefix_sizes = [| 0 |]; storage = [||] }
+let empty = { size = 0; storage = [||] }
 let max_width = Dim.max_width
 let min_width = Dim.max_width - 1
 let increasing = Array.init (max_width + 1) ~f:Fn.id
+let ( += ) r x = r := !r + x
+let ( -= ) r x = r := !r - x
+
+(** post-increment *)
+let ( .++() ) r amount =
+  let pre = !r in
+  r := pre + amount;
+  pre
+;;
 
 let rec get : 't. 't node -> int -> dim:'t node dim -> elt =
   fun (type t) (t : t node) (i : int) ~(dim : t node dim) : elt ->
@@ -71,39 +79,30 @@ let rec get : 't. 't node -> int -> dim:'t node dim -> elt =
      Exn.reraise_uncaught
        (sprintf !"get t.storage.(%d) = %{Sexp#mach}" i (obj_to_sexp (Obj.repr t.storage)))
        (fun () -> t.storage.(i))
-   | S (cols, dim) ->
-     let j = ref (i / cols) in
-     let offset = ref t.prefix_sizes.(!j) in
-     Exn.reraise_uncaught "size index" (fun () ->
-       while t.prefix_sizes.(!j + 1) <= i do
-         offset := t.prefix_sizes.(!j + 1);
-         Int.incr j
-       done);
-     Exn.reraise_uncaught
-       (sprintf
-          "get t.storage.(%d) at %d out of %d. t.prefix_sizes.(!j)=%d"
-          !j
-          (i - !offset)
-          t.size
-          t.prefix_sizes.(!j))
-       (fun () -> get t.storage.(!j) (i - !offset) ~dim)
+   | S (_, dim) ->
+     let j = ref 0 in
+     let i = ref i in
+     while !i >= t.storage.(!j).size do
+       i -= t.storage.(j.++(1)).size
+     done;
+     get t.storage.(!j) !i ~dim
 ;;
 
-let rec set : 't. 't node -> int -> dim:'t node dim -> elt -> 't node =
-  fun (type t) (t : t node) (i : int) ~(dim : t node dim) (elt : elt) : t node ->
+let rec set : 't. 't node -> int -> elt -> dim:'t node dim -> 't node =
+  fun (type t) (t : t node) (i : int) (elt : elt) ~(dim : t node dim) : t node ->
    match dim with
    | One _ ->
      let storage = Array.copy t.storage in
      storage.(i) <- elt;
      { t with storage }
-   | S (cols, dim) ->
-     let j = ref (i / cols) in
-     while t.prefix_sizes.(!j) < i do
-       Int.incr j
+   | S (_, dim) ->
+     let j = ref 0 in
+     let i = ref i in
+     while !i >= t.storage.(!j).size do
+       i -= t.storage.(j.++(1)).size
      done;
-     let next = t.storage.(!j) in
      let storage = Array.copy t.storage in
-     storage.(!j) <- set next (i - t.prefix_sizes.(!j)) ~dim elt;
+     storage.(!j) <- set t.storage.(!j) !i elt ~dim;
      { t with storage }
 ;;
 
@@ -177,18 +176,8 @@ let length t = t.size
 let lsplit2_wide (type a) (w : a wide) : a node node * a wide =
   let len = Int.min max_width (width w) in
   let storage = Array.subo w ~len in
-  let prefix_sizes = Array.create 0 ~len:(len + 1) in
-  Array.iteri storage ~f:(fun i node ->
-    prefix_sizes.(i + 1) <- prefix_sizes.(i) + node.size);
-  let t = { storage; prefix_sizes; size = prefix_sizes.(len) } in
+  let t = { storage; size = Array.sum (module Int) storage ~f:length } in
   t, Array.subo w ~pos:len
-;;
-
-(** post-increment *)
-let ( .++() ) r amount =
-  let pre = !r in
-  r := pre + amount;
-  pre
 ;;
 
 (* TODO: use the sizes to construct the new node without so much copying *)
@@ -229,11 +218,11 @@ let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
           dst))
 ;;
 
-let compute_prefix_sizes nodes =
-  let sizes = Array.create 0 ~len:(width nodes + 1) in
-  Array.iteri nodes ~f:(fun i node -> sizes.(i + 1) <- sizes.(i) + node.size);
-  sizes
-;;
+(* let compute_prefix_sizes nodes = *)
+(*   let sizes = Array.create 0 ~len:(width nodes + 1) in *)
+(*   Array.iteri nodes ~f:(fun i node -> sizes.(i + 1) <- sizes.(i) + node.size); *)
+(*   sizes *)
+(* ;; *)
 
 let append (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim)
   : (a node, a node * a node) Either.t
@@ -247,25 +236,23 @@ let append (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim)
        if w1 > min_width
        then Second (t1, t2)
        else if w1 + w2 <= max_width
-       then (
-         let sizes = Array.create 0 ~len:(w1 + w2 + 1) in
-         Array.blito ~src:t1.prefix_sizes ~dst:sizes ();
-         Array.iteri t2.prefix_sizes ~f:(fun i s -> sizes.(w1 + i) <- s + t1.size);
+       then
+         (* let sizes = Array.create 0 ~len:(w1 + w2 + 1) in *)
+         (* Array.blito ~src:t1.prefix_sizes ~dst:sizes (); *)
+         (* Array.iteri t2.prefix_sizes ~f:(fun i s -> sizes.(w1 + i) <- s + t1.size); *)
          First
-           { size = t1.size + t2.size
-           ; prefix_sizes = sizes
+           { size = t1.size + t2.size (* ; prefix_sizes = sizes *)
            ; storage = Array.append t1.storage t2.storage
-           })
+           }
        else (
          let max_width = (w1 + w2) / 2 in
          let lhs = Array.create t1.storage.(0) ~len:max_width in
          Array.blito ~src:t1.storage ~dst:lhs ();
          Array.blit ~src:t2.storage ~dst:lhs ~src_pos:0 ~dst_pos:w1 ~len:(max_width - w1);
-         let lhs = { size = max_width; prefix_sizes = increasing; storage = lhs } in
+         let lhs = { size = max_width; (* prefix_sizes = increasing; *) storage = lhs } in
          let rhs =
            let size = w2 - (max_width - w1) in
-           { size
-           ; prefix_sizes = Array.subo increasing ~len:(size + 1)
+           { size (* ; prefix_sizes = Array.subo increasing ~len:(size + 1) *)
            ; storage = Array.subo t2.storage ~pos:(max_width - w1)
            }
          in
@@ -279,19 +266,21 @@ let append (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim)
       let prefix_sizes = Array.create 0 ~len:(len + 1) in
       Array.iteri appended ~f:(fun i node ->
         prefix_sizes.(i + 1) <- prefix_sizes.(i) + node.size);
-      First { storage = appended; size = prefix_sizes.(len); prefix_sizes })
+      First { storage = appended; size = prefix_sizes.(len) (* ; prefix_sizes *) })
     else (
       assert (len <= max_width * 2);
       let max_width = len / 2 in
       let lhs =
         let storage = Array.subo appended ~len:max_width in
-        let prefix_sizes = compute_prefix_sizes storage in
-        { size = prefix_sizes.(max_width); prefix_sizes; storage }
+        let size = Array.sum (module Int) storage ~f:length in
+        (* let prefix_sizes = compute_prefix_sizes storage in *)
+        { size (* = prefix_sizes.(max_width) *); (* prefix_sizes; *) storage }
       in
       let rhs =
         let storage = Array.subo appended ~pos:max_width in
-        let prefix_sizes = compute_prefix_sizes storage in
-        { size = prefix_sizes.(Array.length storage); prefix_sizes; storage }
+        let size = Array.sum (module Int) storage ~f:length in
+        (* let prefix_sizes = compute_prefix_sizes storage in *)
+        { size (* = prefix_sizes.(Array.length storage); prefix_sizes *); storage }
       in
       Second (lhs, rhs))
 ;;
@@ -305,14 +294,14 @@ let rec actual_len : 't. 't node -> dim:'t node dim -> int =
         assert (one = 1);
         Array.length t.storage
       | S (cols, dim) ->
-        Array.foldi t.storage ~init:0 ~f:(fun i acc t' ->
-          [%test_result: int] t.prefix_sizes.(i) ~expect:acc;
+        Array.fold t.storage ~init:0 ~f:(fun (* i *) acc t' ->
+          (* [%test_result: int] t.prefix_sizes.(i) ~expect:acc; *)
           let len = actual_len t' ~dim in
           assert (len <= cols);
           acc + len)
     in
     [%test_result: int] len ~expect:t.size;
-    [%test_result: int] t.prefix_sizes.(Array.length t.storage) ~expect:t.size;
+    (* [%test_result: int] t.prefix_sizes.(Array.length t.storage) ~expect:t.size; *)
     len
 ;;
 
@@ -323,8 +312,8 @@ let cons (type t) (x : t) (t : t node) ~(dim : t node dim) : t node =
     | One _ -> 1
     | S _ -> x.size
   in
-  let prefix_sizes = Array.create 0 ~len:(Array.length t.prefix_sizes + 1) in
-  Array.iteri t.prefix_sizes ~f:(fun i x -> prefix_sizes.(i + 1) <- x + new_size);
+  (* let prefix_sizes = Array.create 0 ~len:(Array.length t.prefix_sizes + 1) in *)
+  (* Array.iteri t.prefix_sizes ~f:(fun i x -> prefix_sizes.(i + 1) <- x + new_size); *)
   let storage = Array.create x ~len:(Array.length t.storage + 1) in
   Array.blit
     ~src:t.storage
@@ -332,7 +321,7 @@ let cons (type t) (x : t) (t : t node) ~(dim : t node dim) : t node =
     ~dst:storage
     ~dst_pos:1
     ~len:(Array.length t.storage);
-  { size = t.size + new_size; prefix_sizes; storage }
+  { size = t.size + new_size; (* prefix_sizes; *) storage }
 ;;
 
 let snoc (type t) (t : t node) (x : t) ~(dim : t node dim) : t node =
@@ -342,13 +331,13 @@ let snoc (type t) (t : t node) (x : t) ~(dim : t node dim) : t node =
     | S _ -> x.size
   in
   let size = t.size + new_size in
-  let prefix_sizes = Array.create size ~len:(Array.length t.prefix_sizes + 1) in
-  Array.blit
-    ~src:t.prefix_sizes
-    ~src_pos:0
-    ~dst:prefix_sizes
-    ~dst_pos:0
-    ~len:(Array.length t.prefix_sizes);
+  (* let prefix_sizes = Array.create size ~len:(Array.length t.prefix_sizes + 1) in *)
+  (* Array.blit *)
+  (*   ~src:t.prefix_sizes *)
+  (*   ~src_pos:0 *)
+  (*   ~dst:prefix_sizes *)
+  (*   ~dst_pos:0 *)
+  (*   ~len:(Array.length t.prefix_sizes); *)
   let storage = Array.create x ~len:(Array.length t.storage + 1) in
   Array.blit
     ~src:t.storage
@@ -356,7 +345,7 @@ let snoc (type t) (t : t node) (x : t) ~(dim : t node dim) : t node =
     ~dst:storage
     ~dst_pos:0
     ~len:(Array.length t.storage);
-  { size; prefix_sizes; storage }
+  { size; (* prefix_sizes; *) storage }
 ;;
 
 let singleton x ~dim = cons x empty ~dim

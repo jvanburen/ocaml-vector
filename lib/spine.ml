@@ -21,11 +21,9 @@ let ( -$ ) x y = if x >= y then Some (x - y) else None
 type _ t =
   | Base : 'data node -> 'data node t
   | Spine :
-      { prefix_len : int
+      { size : int
       ; prefix : 'data
-      ; data_len : int
       ; data : 'data node t
-      ; suffix_len : int
       ; suffix : 'data
       }
       -> 'data t
@@ -34,15 +32,8 @@ let rec sexp_of_t : 'arr. ('arr -> Sexp.t) -> 'arr t -> Sexp.t =
   fun (type arr) (sexp_of_arr : arr -> Sexp.t) (t : arr t) : Sexp.t ->
    match t with
    | Base data -> [%sexp (data : arr)]
-   | Spine { prefix_len; data_len; suffix_len; prefix; suffix; data } ->
-     [%sexp
-       { prefix : arr
-       ; prefix_len : int
-       ; data : arr node t
-       ; data_len : int
-       ; suffix : arr
-       ; suffix_len : int
-       }]
+   | Spine { size; prefix; suffix; data } ->
+     [%sexp { size : int; prefix : arr; data : arr node t; suffix : arr }]
 ;;
 
 let empty = Base Multi_array.empty
@@ -50,7 +41,7 @@ let empty = Base Multi_array.empty
 let length (type a) (t : a t) =
   match t with
   | Base b -> b.size
-  | Spine s -> s.prefix_len + s.data_len + s.suffix_len
+  | Spine s -> s.size
 ;;
 
 let rec get : 'a. 'a node t -> int -> dim:'a node dim -> elt =
@@ -59,11 +50,13 @@ let rec get : 'a. 'a node t -> int -> dim:'a node dim -> elt =
      match t with
      | Base b -> Multi_array.get b i ~dim
      | Spine s ->
-       (match i -$ s.prefix_len with
+       let prefix_len = Tree.length s.prefix in
+       (match i -$ prefix_len with
         | None -> s.prefix.+(i, dim)
         | Some i ->
+          let data_len = s.size - prefix_len - Tree.length s.suffix in
           Exn.reraise_uncaught (sprintf "get data %d" i) (fun () ->
-            match i -$ s.data_len with
+            match i -$ data_len with
             | None -> get s.data i ~dim:(next dim)
             | Some i ->
               Exn.reraise_uncaught (sprintf "get suffix %d" i) (fun () ->
@@ -75,51 +68,54 @@ let rec set : 'a. 'a node t -> int -> elt -> dim:'a node dim -> 'a node t =
    match t with
    | Base b -> Base (Multi_array.set b i elt ~dim)
    | Spine s ->
-     (match i -$ s.prefix_len with
+     let prefix_len = Tree.length s.prefix in
+     (match i -$ prefix_len with
       | None -> Spine { s with prefix = s.prefix.+(i, dim) <- elt }
       | Some i ->
-        (match i -$ s.data_len with
+        let data_len = s.size - prefix_len - Tree.length s.suffix in
+        (match i -$ data_len with
          | None -> Spine { s with data = set s.data i elt ~dim:(next dim) }
          | Some i -> Spine { s with suffix = s.suffix.+(i, dim) <- elt }))
 ;;
 
 let rec cons : 'a. 'a -> 'a node t -> dim:'a node dim -> 'a node t =
   fun (type a) (elt : a) (t : a node t) ~(dim : a node dim) : a node t ->
+   let size =
+     length t
+     +
+     match dim with
+     | One _ -> 1
+     | S (_, _) -> Tree.length elt
+   in
    match t with
    | Base data ->
      if Array.length data.storage < max_width - 2
      then (
-       let data = Multi_array.cons elt data ~dim in
+       let data = Tree.cons elt data ~dim in
        Base data)
      else
        (* TODO: should this really be in suffix? why not data? *)
-       Spine
-         { prefix = Multi_array.singleton elt ~dim
-         ; prefix_len = cols dim
-         ; data = empty
-         ; data_len = 0
-         ; suffix = data
-         ; suffix_len = Multi_array.length data
-         }
+       Spine { prefix = Tree.singleton elt ~dim; data = empty; suffix = data; size }
    | Spine s ->
      if Array.length s.prefix.storage < max_width
      then (
        let prefix = Multi_array.cons elt s.prefix ~dim in
-       Spine { s with prefix_len = prefix.size; prefix })
+       Spine { s with size; prefix })
      else (
        let prefix = Multi_array.singleton elt ~dim in
        Spine
-         { prefix_len = prefix.size
-         ; prefix
-         ; data_len = s.prefix_len + s.data_len
-         ; data = cons s.prefix s.data ~dim:(next dim)
-         ; suffix_len = s.suffix_len
-         ; suffix = s.suffix
-         })
+         { prefix; data = cons s.prefix s.data ~dim:(next dim); suffix = s.suffix; size })
 ;;
 
 let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
   fun (type a) (t : a node t) (elt : a) ~(dim : a node dim) : a node t ->
+   let size =
+     length t
+     +
+     match dim with
+     | One _ -> 1
+     | S (_, _) -> Tree.length elt
+   in
    match t with
    | Base data ->
      if Array.length data.storage < max_width - 2
@@ -127,29 +123,16 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
      else (
        (* TODO: should this really be in suffix? why not data? *)
        let suffix = Multi_array.singleton elt ~dim in
-       Spine
-         { prefix = data
-         ; prefix_len = Multi_array.length data
-         ; data = empty
-         ; data_len = 0
-         ; suffix
-         ; suffix_len = suffix.size
-         })
+       Spine { prefix = data; data = empty; suffix; size })
    | Spine s ->
      if Array.length s.suffix.storage < max_width
      then (
        let suffix = Multi_array.snoc s.suffix elt ~dim in
-       Spine { s with suffix_len = suffix.size; suffix })
+       Spine { s with size; suffix })
      else (
        let suffix = Multi_array.singleton elt ~dim in
        Spine
-         { prefix_len = s.prefix_len
-         ; prefix = s.prefix
-         ; data_len = s.suffix_len + s.data_len
-         ; data = snoc s.data s.suffix ~dim:(next dim)
-         ; suffix_len = suffix.size
-         ; suffix
-         })
+         { prefix = s.prefix; data = snoc s.data s.suffix ~dim:(next dim); suffix; size })
 ;;
 
 (* let rec append_tree_widths : 'a. 'a node -> 'a node  -> dim:'a node dim -> 'a node = *)
@@ -172,7 +155,7 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 (*         let w = Tree.width t2.storage.(i) in *)
 (*         if !last_width + w > max_width then ( *)
 (*           sizes.(!dst_pos) <- last_size + *)
-(*           last_width := !last_width + w - max_width; *) 
+(*           last_width := !last_width + w - max_width; *)
 (*         ) *)
 (*       done *)
 
@@ -191,30 +174,24 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 
 (* ;; *)
 
-let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
-  fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t ->
-   match t1, t2 with
-   | Base b1, Base b2 ->
-     (match Tree.append b1 b2 ~dim ~max_width with
-      | First b -> Base b
-      | Second (prefix, suffix) ->
-        Spine
-          { prefix_len = Tree.length prefix
-          ; prefix
-          ; data_len = 0
-          ; data = empty
-          ; suffix
-          ; suffix_len = Tree.length suffix
-          })
-   | Base b1, Spine s2 ->
-
-     (* TODO: make the RHS bigger than the RHS while merging *)
-     match Tree.append b1 s2.prefix ~dim  with
-
-
-
-
-;;
+(* let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t = *)
+(*   fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t -> *)
+(*    match t1, t2 with *)
+(*    | Base b1, Base b2 -> *)
+(*      (match Tree.append b1 b2 ~dim  with *)
+(*       | First b -> Base b *)
+(*       | Second (prefix, suffix) -> *)
+(*         Spine *)
+(*           { prefix_len = Tree.length prefix *)
+(*           ; prefix *)
+(*           ; data_len = 0 *)
+(*           ; data = empty *)
+(*           ; suffix *)
+(*           ; suffix_len = Tree.length suffix *)
+(*           }) *)
+(*    | Base b1, Spine s2 -> *)
+(*      (\* TODO: make the RHS bigger than the LHS while merging *\) *)
+(*      match Tree.append b1 s2.prefix ~dim  with *)
 
 let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
   fun (type a) (t : a node t) ~(f : elt -> elt) ~(dim : a node dim) : a node t ->
@@ -339,13 +316,20 @@ let rec actual_len : 'arr. 'arr node t -> dim:'arr node dim -> int =
   fun (type arr) (t : arr node t) ~(dim : arr node dim) : int ->
    match t with
    | Base data -> Multi_array.actual_len data ~dim
-   | Spine { prefix_len; data_len; suffix_len; prefix; suffix; data } ->
-     [%test_result: int] prefix_len ~expect:(Multi_array.actual_len prefix ~dim);
-     [%test_result: int] data_len ~expect:(actual_len data ~dim:(next dim));
-     [%test_result: int] suffix_len ~expect:(Multi_array.actual_len suffix ~dim);
-     let len = prefix_len + data_len + suffix_len in
-     assert (len > 0);
-     len
+   | Spine { size; (* prefix_len; data_len; suffix_len; *) prefix; suffix; data } ->
+     (* [%test_result: int] prefix_len ~expect:(Multi_array.actual_len prefix ~dim); *)
+     (* [%test_result: int] data_len ~expect:(actual_len data ~dim:(next dim)); *)
+     (* [%test_result: int] suffix_len ~expect:(Multi_array.actual_len suffix ~dim); *)
+
+     (* let len = prefix_len + data_len + suffix_len in *)
+     [%test_result: int]
+       size
+       ~expect:
+         (Tree.actual_len prefix ~dim
+         + actual_len data ~dim:(next dim)
+         + Tree.actual_len suffix ~dim);
+     assert (size > 0);
+     size
 ;;
 
 let invariant t ~dim =
