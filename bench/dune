@@ -1,0 +1,20 @@
+(library
+  (name vec_bench)
+  (libraries base vec)
+ (modules vec_bench)
+ (library_flags -linkall)
+  (inline_tests)
+  (preprocess (pps ppx_jane))
+)
+
+; (test
+;  (name vec_bench)
+;  (libraries base vec)
+;  (inline_tests)
+;  (preprocess (pps ppx_jane))
+; )
+(executable
+ (name bench_main)
+ (allow_overlapping_dependencies)
+ (modules bench_main)
+ (libraries vec_bench core_bench.inline_benchmarks))
