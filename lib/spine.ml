@@ -44,6 +44,11 @@ let length (type a) (t : a t) =
   | Spine s -> s.size
 ;;
 
+let spine ~prefix ~data ~suffix =
+  let size = Tree.length prefix + length data + Tree.length suffix in
+  Spine { size; prefix; data; suffix }
+;;
+
 let rec get : 'a. 'a node t -> int -> dim:'a node dim -> elt =
   fun (type a) (t : a node t) (i : int) ~(dim : a node dim) : elt ->
    Exn.reraise_uncaught (sprintf "get %d" i) (fun () ->
@@ -174,24 +179,61 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 
 (* ;; *)
 
-(* let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t = *)
-(*   fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t -> *)
-(*    match t1, t2 with *)
-(*    | Base b1, Base b2 -> *)
-(*      (match Tree.append b1 b2 ~dim  with *)
-(*       | First b -> Base b *)
-(*       | Second (prefix, suffix) -> *)
-(*         Spine *)
-(*           { prefix_len = Tree.length prefix *)
-(*           ; prefix *)
-(*           ; data_len = 0 *)
-(*           ; data = empty *)
-(*           ; suffix *)
-(*           ; suffix_len = Tree.length suffix *)
-(*           }) *)
-(*    | Base b1, Spine s2 -> *)
-(*      (\* TODO: make the RHS bigger than the LHS while merging *\) *)
-(*      match Tree.append b1 s2.prefix ~dim  with *)
+(* let rec of_trees : 'a. 'a node -> dim:'a node dim -> 'a node t = *)
+(*   fun (type a) (tree : a node) ~(dim : a node dim) : a node t -> *)
+(*    let width = Array.length tree.storage in *)
+(*    if width <= max_width - 2 *)
+(*    then Base tree *)
+(*    else ( *)
+(*      match dim with *)
+(*      | One _ -> Base tree *)
+(*      | S (_, dim) -> *)
+(*        let mid = width / 2 in *)
+(*        let size = Tree.length tree in *)
+(*        let prefix = *)
+(*          Array.sub *)
+(*          tree.storage.(0) in *)
+(*        let suffix = tree.storage.(width - 1) in *)
+(*        let data = *)
+(*          of_trees *)
+(*            { size = size - Tree.length prefix - Tree.length suffix *)
+(*            ; storage = Array.sub tree.storage ~pos:1 ~len:(width - 2) *)
+(*            } *)
+(*            ~dim *)
+(*        in *)
+(*        Spine { prefix; suffix; size; data }) *)
+(* ;; *)
+
+let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
+  fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t ->
+   let size = length t1 + length t2 in
+   match t1, t2 with
+   | Base b1, Base b2 ->
+     (match Tree.append b1 b2 ~dim with
+      | First b -> Base b
+      | Second (prefix, suffix) -> Spine { size; prefix; data = empty; suffix })
+   | Base b1, Spine s2 ->
+     (match Tree.append b1 s2.prefix ~dim with
+      | First prefix -> Spine { s2 with size; prefix }
+      | Second (prefix, lhs) ->
+        Spine
+          { size; prefix; data = cons lhs s2.data ~dim:(next dim); suffix = s2.suffix })
+   | Spine s1, Base b2 ->
+     (match Tree.append s1.suffix b2 ~dim with
+      | First suffix -> Spine { s1 with size; suffix }
+      | Second (rhs, suffix) ->
+        Spine
+          { size; prefix = s1.prefix; suffix; data = snoc s1.data rhs ~dim:(next dim) })
+   | Spine s1, Spine s2 ->
+     (* TODO: special cases *)
+     let data =
+       match Tree.append s1.suffix s2.prefix ~dim, next dim with
+       | First mid, dim -> append (snoc s1.data mid ~dim) s2.data ~dim
+       | Second (lhs, rhs), dim ->
+         append (snoc s1.data lhs ~dim) (cons rhs s2.data ~dim) ~dim
+     in
+     Spine { size; prefix = s1.prefix; data; suffix = s2.suffix }
+;;
 
 let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
   fun (type a) (t : a node t) ~(f : elt -> elt) ~(dim : a node dim) : a node t ->

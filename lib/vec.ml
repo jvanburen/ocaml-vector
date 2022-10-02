@@ -78,13 +78,7 @@ let equal (type a) (equal_a : a -> a -> bool) (x : a t) (y : a t) : bool =
 ;;
 
 let append (type a) (x : a t) (y : a t) : a t =
-  if is_empty x
-  then y
-  else if is_empty y
-  then x
-  else (
-    let b = Spine.Builder.of_spine x ~dim in
-    Spine.Builder.add_spine b y ~dim |> Spine.Builder.to_spine ~dim)
+  if is_empty x then y else if is_empty y then x else Spine.append x y ~dim
 ;;
 
 let init =
@@ -499,6 +493,49 @@ let%test_module _ =
         [%test_result: int array] (to_array !t) ~expect:(Array.of_list (to_list !t))
       done;
       [%expect {||}]
+    ;;
+
+    let%expect_test "append" =
+      let l = init 10 ~f:succ in
+      let r = init 10 ~f:(fun x -> x + 11) in
+      print_s [%sexp (l : int debug)];
+      [%expect{|
+        ((size 10)
+         (prefix ((size 1) (storage (1))))
+         (data (
+           (size 6)
+           (prefix ((size 3) (storage (((size 3) (storage (2 3 4)))))))
+           (data ((size 0) (storage ())))
+           (suffix ((size 3) (storage (((size 3) (storage (5 6 7)))))))))
+         (suffix ((size 3) (storage (8 9 10))))) |}];
+      print_s [%sexp (r : int debug)];
+      [%expect{|
+        ((size 10)
+         (prefix ((size 1) (storage (11))))
+         (data (
+           (size 6)
+           (prefix ((size 3) (storage (((size 3) (storage (12 13 14)))))))
+           (data ((size 0) (storage ())))
+           (suffix ((size 3) (storage (((size 3) (storage (15 16 17)))))))))
+         (suffix ((size 3) (storage (18 19 20))))) |}];
+      print_s [%sexp (append l r : int debug)];
+      [%expect{|
+        ((size 20)
+         (prefix ((size 1) (storage (1))))
+         (data (
+           (size 16)
+           (prefix ((size 3) (storage (((size 3) (storage (2 3 4)))))))
+           (data (
+             (size 10)
+             (storage (
+               ((size 6)
+                (storage (
+                  ((size 3) (storage (5 6 7)))
+                  ((size 3) (storage (8 9 10))))))
+               ((size 4)
+                (storage (((size 1) (storage (11))) ((size 3) (storage (12 13 14))))))))))
+           (suffix ((size 3) (storage (((size 3) (storage (15 16 17)))))))))
+         (suffix ((size 3) (storage (18 19 20))))) |}]
     ;;
   end)
 ;;
