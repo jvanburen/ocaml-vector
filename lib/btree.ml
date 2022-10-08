@@ -1,7 +1,7 @@
 open! Core
 
 let max_search_error = 2
-let max_width = 4
+let max_width = 16
 let min_width = max_width - (max_search_error / 2)
 
 module With = struct
@@ -309,10 +309,11 @@ let append (type a) (t1 : a node) (t2 : a node) ~fill ~(dim : a node dim)
   else (
     assert (len <= max_width * 2);
     let i =
+      (* TODO: do we get better performance by paying attention to this? *)
       match fill with
-      | `Left -> max_width
-      | `Split -> len / 2
-      | `Right -> len - max_width
+      | `Left | `Split | `Right -> max_width
+      (* | `Split -> len / 2 *)
+      (* | `Right -> len - max_width *)
     in
     let lhs = create (Array.subo appended ~len:i) ~dim in
     let rhs = create (Array.subo appended ~pos:i) ~dim in
