@@ -1,20 +1,17 @@
 open! Core
 
-(* TODO: rename multi_array -> tree *)
-module Tree = Multi_array
+type elt = Btree.elt
+type 'a node = 'a Btree.node [@@deriving sexp_of]
 
-type elt = Multi_array.elt
-type 'a node = 'a Multi_array.node [@@deriving sexp_of]
-
-type 'a dim = 'a Multi_array.Dim.t =
+type 'a dim = 'a Btree.Dim.t =
   | One : int -> elt node dim
   | S : int * 'a node dim -> 'a node node dim
 
-let max_width = Multi_array.Dim.max_width
-let cols = Multi_array.Dim.cols
-let next = Multi_array.Dim.next
-let[@inline] ( .+() ) a (i, dim) = Multi_array.get a i ~dim
-let[@inline] ( .+()<- ) a (i, dim) x = Multi_array.set a i x ~dim
+let max_width = Btree.Dim.max_width
+let cols = Btree.Dim.cols
+let next = Btree.Dim.next
+let[@inline] ( .+() ) a (i, dim) = Btree.get a i ~dim
+let[@inline] ( .+()<- ) a (i, dim) x = Btree.set a i x ~dim
 let ( -$ ) x y = if x >= y then Some (x - y) else None
 
 (* TODO: store pre/pre+data/total lengths instead of pre/data/suff *)
@@ -36,7 +33,7 @@ let rec sexp_of_t : 'arr. ('arr -> Sexp.t) -> 'arr t -> Sexp.t =
      [%sexp { size : int; prefix : arr; data : arr node t; suffix : arr }]
 ;;
 
-let empty = Base Multi_array.empty
+let empty = Base Btree.empty
 
 let length (type a) (t : a t) =
   match t with
@@ -47,18 +44,18 @@ let length (type a) (t : a t) =
 let rec invariant : 'a. 'a node t -> dim:'a node dim -> unit =
   fun (type a) (t : a node t) ~(dim : a node dim) : unit ->
    match t with
-   | Base tree -> Tree.invariant tree ~dim
+   | Base tree -> Btree.invariant tree ~dim
    | Spine { size; prefix; data; suffix } ->
-     Tree.invariant prefix ~dim;
+     Btree.invariant prefix ~dim;
      invariant data ~dim:(next dim);
-     Tree.invariant suffix ~dim;
+     Btree.invariant suffix ~dim;
      [%test_result: int]
        size
-       ~expect:(Tree.length prefix + length data + Tree.length suffix)
+       ~expect:(Btree.length prefix + length data + Btree.length suffix)
 ;;
 
 let spine ~prefix ~data ~suffix =
-  let size = Tree.length prefix + length data + Tree.length suffix in
+  let size = Btree.length prefix + length data + Btree.length suffix in
   Spine { size; prefix; data; suffix }
 ;;
 
@@ -66,13 +63,13 @@ let rec get : 'a. 'a node t -> int -> dim:'a node dim -> elt =
   fun (type a) (t : a node t) (i : int) ~(dim : a node dim) : elt ->
    Exn.reraise_uncaught (sprintf "get %d" i) (fun () ->
      match t with
-     | Base b -> Multi_array.get b i ~dim
+     | Base b -> Btree.get b i ~dim
      | Spine s ->
-       let prefix_len = Tree.length s.prefix in
+       let prefix_len = Btree.length s.prefix in
        (match i -$ prefix_len with
         | None -> s.prefix.+(i, dim)
         | Some i ->
-          let data_len = s.size - prefix_len - Tree.length s.suffix in
+          let data_len = s.size - prefix_len - Btree.length s.suffix in
           Exn.reraise_uncaught (sprintf "get data %d" i) (fun () ->
             match i -$ data_len with
             | None -> get s.data i ~dim:(next dim)
@@ -84,13 +81,13 @@ let rec get : 'a. 'a node t -> int -> dim:'a node dim -> elt =
 let rec set : 'a. 'a node t -> int -> elt -> dim:'a node dim -> 'a node t =
   fun (type a) (t : a node t) (i : int) (elt : elt) ~(dim : a node dim) : a node t ->
    match t with
-   | Base b -> Base (Multi_array.set b i elt ~dim)
+   | Base b -> Base (Btree.set b i elt ~dim)
    | Spine s ->
-     let prefix_len = Tree.length s.prefix in
+     let prefix_len = Btree.length s.prefix in
      (match i -$ prefix_len with
       | None -> Spine { s with prefix = s.prefix.+(i, dim) <- elt }
       | Some i ->
-        let data_len = s.size - prefix_len - Tree.length s.suffix in
+        let data_len = s.size - prefix_len - Btree.length s.suffix in
         (match i -$ data_len with
          | None -> Spine { s with data = set s.data i elt ~dim:(next dim) }
          | Some i -> Spine { s with suffix = s.suffix.+(i, dim) <- elt }))
@@ -103,24 +100,24 @@ let rec cons : 'a. 'a -> 'a node t -> dim:'a node dim -> 'a node t =
      +
      match dim with
      | One _ -> 1
-     | S (_, _) -> Tree.length elt
+     | S (_, _) -> Btree.length elt
    in
    match t with
    | Base data ->
      if Array.length data.storage < max_width - 2
      then (
-       let data = Tree.cons elt data ~dim in
+       let data = Btree.cons elt data ~dim in
        Base data)
      else
        (* TODO: should this really be in suffix? why not data? *)
-       Spine { prefix = Tree.singleton elt ~dim; data = empty; suffix = data; size }
+       Spine { prefix = Btree.singleton elt ~dim; data = empty; suffix = data; size }
    | Spine s ->
      if Array.length s.prefix.storage < max_width
      then (
-       let prefix = Multi_array.cons elt s.prefix ~dim in
+       let prefix = Btree.cons elt s.prefix ~dim in
        Spine { s with size; prefix })
      else (
-       let prefix = Multi_array.singleton elt ~dim in
+       let prefix = Btree.singleton elt ~dim in
        Spine
          { prefix; data = cons s.prefix s.data ~dim:(next dim); suffix = s.suffix; size })
 ;;
@@ -132,34 +129,34 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
      +
      match dim with
      | One _ -> 1
-     | S (_, _) -> Tree.length elt
+     | S (_, _) -> Btree.length elt
    in
    match t with
    | Base data ->
      if Array.length data.storage < max_width - 2
-     then Base (Multi_array.snoc data elt ~dim)
+     then Base (Btree.snoc data elt ~dim)
      else (
        (* TODO: should this really be in suffix? why not data? *)
-       let suffix = Multi_array.singleton elt ~dim in
+       let suffix = Btree.singleton elt ~dim in
        Spine { prefix = data; data = empty; suffix; size })
    | Spine s ->
      if Array.length s.suffix.storage < max_width
      then (
-       let suffix = Multi_array.snoc s.suffix elt ~dim in
+       let suffix = Btree.snoc s.suffix elt ~dim in
        Spine { s with size; suffix })
      else (
-       let suffix = Multi_array.singleton elt ~dim in
+       let suffix = Btree.singleton elt ~dim in
        Spine
          { prefix = s.prefix; data = snoc s.data s.suffix ~dim:(next dim); suffix; size })
 ;;
 
 (* let rec append_tree_widths : 'a. 'a node -> 'a node  -> dim:'a node dim -> 'a node = *)
-(*   fun (type a) (t1 : a Tree.wide) (t2 : a Tree.wide) ~(dim : a node dim) : a node -> *)
-(*   let w1 = Tree.width t1 *)
-(*   and w2 = Tree.width t2 in *)
+(*   fun (type a) (t1 : a Btree.wide) (t2 : a Btree.wide) ~(dim : a node dim) : a node -> *)
+(*   let w1 = Btree.width t1 *)
+(*   and w2 = Btree.width t2 in *)
 (*   match dim with *)
 (*   | One _ -> *)
-(*     let total_width = Tree.width t1 + Tree.width t2 in *)
+(*     let total_width = Btree.width t1 + Btree.width t2 in *)
 (*     if total_width <= max_width then [| total_width |] else [| max_width; total_width - max_width|] *)
 (*   | Many (_, dim) -> *)
 (*     if Array.is_empty t1.storage then t2.prefix_sizes  *)
@@ -167,10 +164,10 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 (*       let sizes = Array.create 0 ~len:(w1 + w2) in *)
 (*       Array.blito ~src:t1.prefix_sizes ~dst:sizes(); *)
 (*       let dst_pos = ref w1 in *)
-(*       let last_size = ref (Tree.length t1) in *)
-(*       let last_width = ref (Tree.width t1.storage.(Tree.width t1 - 1)) in *)
-(*       for i = 0 to Tree.width t2 - 1 do *)
-(*         let w = Tree.width t2.storage.(i) in *)
+(*       let last_size = ref (Btree.length t1) in *)
+(*       let last_width = ref (Btree.width t1.storage.(Btree.width t1 - 1)) in *)
+(*       for i = 0 to Btree.width t2 - 1 do *)
+(*         let w = Btree.width t2.storage.(i) in *)
 (*         if !last_width + w > max_width then ( *)
 (*           sizes.(!dst_pos) <- last_size + *)
 (*           last_width := !last_width + w - max_width; *)
@@ -178,12 +175,12 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 (*       done *)
 
 (*       Array.iteri t2.storage ~f:() *)
-(*       while !src_pos < Tree.width t2 do *)
+(*       while !src_pos < Btree.width t2 do *)
 
 (*       let dst = Array.create 0 ~len:() in *)
 (*     Array.blito ~src:t1.prefix_sizes ~dst; *)
-(*     let last_size = ref (Tree.width t1) in *)
-(*     let dst = ref (Tree.width t1) in *)
+(*     let last_size = ref (Btree.width t1) in *)
+(*     let dst = ref (Btree.width t1) in *)
 
 (*   (\*   let rec append_trees : 'a. 'a node -> 'a node -> dim:'a node dim -> 'a node t = *\) *)
 (*   (\* fun (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim) : a node t -> *\) *)
@@ -202,14 +199,14 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 (*      | One _ -> Base tree *)
 (*      | S (_, dim) -> *)
 (*        let mid = width / 2 in *)
-(*        let size = Tree.length tree in *)
+(*        let size = Btree.length tree in *)
 (*        let prefix = *)
 (*          Array.sub *)
 (*          tree.storage.(0) in *)
 (*        let suffix = tree.storage.(width - 1) in *)
 (*        let data = *)
 (*          of_trees *)
-(*            { size = size - Tree.length prefix - Tree.length suffix *)
+(*            { size = size - Btree.length prefix - Btree.length suffix *)
 (*            ; storage = Array.sub tree.storage ~pos:1 ~len:(width - 2) *)
 (*            } *)
 (*            ~dim *)
@@ -222,17 +219,17 @@ let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
    let size = length t1 + length t2 in
    match t1, t2 with
    | Base b1, Base b2 ->
-     (match Tree.append b1 b2 ~dim with
+     (match Btree.append b1 b2 ~dim with
       | First b -> Base b
       | Second (prefix, suffix) -> Spine { size; prefix; data = empty; suffix })
    | Base b1, Spine s2 ->
-     (match Tree.append b1 s2.prefix ~dim with
+     (match Btree.append b1 s2.prefix ~dim with
       | First prefix -> Spine { s2 with size; prefix }
       | Second (prefix, lhs) ->
         Spine
           { size; prefix; data = cons lhs s2.data ~dim:(next dim); suffix = s2.suffix })
    | Spine s1, Base b2 ->
-     (match Tree.append s1.suffix b2 ~dim with
+     (match Btree.append s1.suffix b2 ~dim with
       | First suffix -> Spine { s1 with size; suffix }
       | Second (rhs, suffix) ->
         Spine
@@ -240,7 +237,7 @@ let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
    | Spine s1, Spine s2 ->
      (* TODO: special cases *)
      let data =
-       match Tree.append s1.suffix s2.prefix ~dim, next dim with
+       match Btree.append s1.suffix s2.prefix ~dim, next dim with
        | First mid, dim -> append (snoc s1.data mid ~dim) s2.data ~dim
        | Second (lhs, rhs), dim ->
          append (snoc s1.data lhs ~dim) (cons rhs s2.data ~dim) ~dim
@@ -251,26 +248,26 @@ let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
 let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
   fun (type a) (t : a node t) ~(f : elt -> elt) ~(dim : a node dim) : a node t ->
    match t with
-   | Base b -> if Multi_array.length b = 0 then t else Base (Multi_array.map b ~f ~dim)
+   | Base b -> if Btree.length b = 0 then t else Base (Btree.map b ~f ~dim)
    | Spine s ->
-     let prefix = Multi_array.map s.prefix ~f ~dim in
+     let prefix = Btree.map s.prefix ~f ~dim in
      let data = map s.data ~f ~dim:(next dim) in
-     let suffix = Multi_array.map s.suffix ~f ~dim in
+     let suffix = Btree.map s.suffix ~f ~dim in
      Spine { s with prefix; data; suffix }
 ;;
 
 (* let rec rev : 'a. 'a node t -> dim:'a node dim -> 'a node t = *)
 (*   fun (type a) (t : a node t) ~(dim : a node dim) : a node t -> *)
 (*    match t with *)
-(*    | Base b -> if b.len = 0 then t else Base { b with data = Multi_array.rev b.data ~dim } *)
+(*    | Base b -> if b.len = 0 then t else Base { b with data = Btree.rev b.data ~dim } *)
 (*    | Spine { prefix_len; prefix; data_len; data; suffix_len; suffix } -> *)
 (*      Spine *)
 (*        { prefix_len = suffix_len *)
-(*        ; prefix = Multi_array.rev suffix ~dim *)
+(*        ; prefix = Btree.rev suffix ~dim *)
 (*        ; data_len *)
 (*        ; data = rev data ~dim:(next dim) *)
 (*        ; suffix_len = prefix_len *)
-(*        ; suffix = Multi_array.rev prefix ~dim *)
+(*        ; suffix = Btree.rev prefix ~dim *)
 (*        } *)
 (* ;; *)
 
@@ -285,11 +282,11 @@ let rec fold_left :
       ~(dim : a node dim)
     : acc ->
    match t with
-   | Base b -> Multi_array.fold_left b ~init ~f ~dim
+   | Base b -> Btree.fold_left b ~init ~f ~dim
    | Spine s ->
-     let init = Multi_array.fold_left s.prefix ~init ~f ~dim in
+     let init = Btree.fold_left s.prefix ~init ~f ~dim in
      let init = fold_left s.data ~init ~f ~dim:(next dim) in
-     Multi_array.fold_left s.suffix ~init ~f ~dim
+     Btree.fold_left s.suffix ~init ~f ~dim
 ;;
 
 let rec fold_right :
@@ -303,11 +300,11 @@ let rec fold_right :
       ~(dim : a node dim)
     : acc ->
    match t with
-   | Base b -> Multi_array.fold_right b ~init ~f ~dim
+   | Base b -> Btree.fold_right b ~init ~f ~dim
    | Spine s ->
-     let init = Multi_array.fold_right s.suffix ~init ~f ~dim in
+     let init = Btree.fold_right s.suffix ~init ~f ~dim in
      let init = fold_right s.data ~init ~f ~dim:(next dim) in
-     Multi_array.fold_right s.prefix ~init ~f ~dim
+     Btree.fold_right s.prefix ~init ~f ~dim
 ;;
 
 (* module To_node = struct *)
@@ -346,7 +343,7 @@ let rec fold_right :
 (*       : unit -> *)
 (*      match src with *)
 (*      | Base b -> *)
-(*        Multi_array.To_node.unchecked_blit ~src:b.data ~src_pos ~dst ~dst_pos ~len ~dim *)
+(*        Btree.To_node.unchecked_blit ~src:b.data ~src_pos ~dst ~dst_pos ~len ~dim *)
 (*      | Spine s -> *)
 (*        blit_helper *)
 (*          ~src_len:s.prefix_len *)
@@ -354,7 +351,7 @@ let rec fold_right :
 (*          ~dst *)
 (*          ~dst_pos *)
 (*          ~len *)
-(*          ~blit:(Multi_array.To_node.unchecked_blit ~src:s.prefix ~dim) *)
+(*          ~blit:(Btree.To_node.unchecked_blit ~src:s.prefix ~dim) *)
 (*          ~next: *)
 (*            (blit_helper *)
 (*               ~src_len:s.data_len *)
@@ -362,7 +359,7 @@ let rec fold_right :
 (*               ~next: *)
 (*                 (blit_helper *)
 (*                    ~src_len:s.suffix_len *)
-(*                    ~blit:(Multi_array.To_node.unchecked_blit ~src:s.suffix ~dim) *)
+(*                    ~blit:(Btree.To_node.unchecked_blit ~src:s.suffix ~dim) *)
 (*                    ~next:(fun ~src_pos:_ ~dst:_ ~dst_pos:_ ~len:_ -> ()))) *)
 (*   ;; *)
 (* end *)
@@ -374,7 +371,7 @@ module Builder = struct
   let empty = Builder empty
   let of_spine t ~dim:_ = Builder t
   let to_spine (Builder t) ~dim:_ = t
-  let add (Builder t) elt = Builder (snoc t elt ~dim:Multi_array.Dim.one)
+  let add (Builder t) elt = Builder (snoc t elt ~dim:Btree.Dim.one)
   let add_arr t other = Array.fold other ~init:t ~f:add
   let add_spine t other ~dim = fold_left other ~init:t ~f:add ~dim
 end
@@ -394,7 +391,7 @@ end
 (*     | Empty : _ node *)
 (*     | Base : *)
 (*         { mutable len : int *)
-(*         ; mutable data : 'data Multi_array.node *)
+(*         ; mutable data : 'data Btree.node *)
 (*         } *)
 (*         -> 'data array node *)
 (*     | Spine : *)
@@ -437,8 +434,8 @@ end
 (*            dst)) *)
 (*   ;; *)
 
-(*   let create_empty_node (type t) (t : t) ~(dim : t Multi_array.node dim) *)
-(*     : t Multi_array.node *)
+(*   let create_empty_node (type t) (t : t) ~(dim : t Btree.node dim) *)
+(*     : t Btree.node *)
 (*     = *)
 (*     let width = max_width - 2 in *)
 (*     match dim with *)
@@ -454,7 +451,7 @@ end
 (*       } *)
 (*   ;; *)
 
-(*   let truncate (type t) (t : t Multi_array.node) ~width = *)
+(*   let truncate (type t) (t : t Btree.node) ~width = *)
 (*     if width = Array.length t.storage *)
 (*     then t *)
 (*     else *)
@@ -547,8 +544,8 @@ end
 (*            add_arr node a ~pos:(pos + 1) ~len:(len - 1))) *)
 (*   ;; *)
 
-(*   let rec to_spine : 'a. 'a array node -> dim:'a array dim -> 'a Multi_array.node spine = *)
-(*     fun (type a) (node : a array node) ~(dim : a array dim) : a Multi_array.node spine -> *)
+(*   let rec to_spine : 'a. 'a array node -> dim:'a array dim -> 'a Btree.node spine = *)
+(*     fun (type a) (node : a array node) ~(dim : a array dim) : a Btree.node spine -> *)
 (*      match node with *)
 (*      | Empty -> empty *)
 (*      | Base { len; data } -> Base { len = len * cols dim; data = trunc data ~len } *)

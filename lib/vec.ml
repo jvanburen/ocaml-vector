@@ -6,11 +6,11 @@ module View = struct
     | ( :: ) of 'a * 'b
 end
 
-type any = Multi_array.elt
-type 'a node = 'a Multi_array.node [@@deriving sexp_of]
+type any = Btree.elt
+type 'a node = 'a Btree.node [@@deriving sexp_of]
 type +'a t = any node Spine.t
 
-let dim : any node Multi_array.Dim.t = Multi_array.Dim.one
+let dim : any node Btree.Dim.t = Btree.Dim.one
 
 external of_any : any -> 'a = "%opaque"
 external to_any : 'a -> any = "%opaque"
@@ -311,6 +311,15 @@ let%test_module _ =
     let%test_unit "append" =
       Quickcheck.test [%quickcheck.generator: int t * int t] ~f:(fun (t1, t2) ->
         [%test_result: int list] (to_list (append t1 t2)) ~expect:(to_list t1 @ to_list t2))
+    ;;
+
+    let%test_unit "append" =
+      Quickcheck.test [%quickcheck.generator: int list * int list] ~f:(fun (l1, l2) ->
+        let t1 = of_list l1 in
+        let t2 = of_list l2 in
+        let t = append t1 t2 in
+        check t;
+        [%test_result: int list] (to_list t) ~expect:(l1 @ l2))
     ;;
 
     let%test_unit "rev" =
