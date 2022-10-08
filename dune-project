@@ -14,7 +14,7 @@
 (package
  (name vec)
  (synopsis "immutable vectors")
- (description "Immutable vectors based on radix-balanced finger trees")
+ (description "Immutable vectors based on relaxed radix-balanced finger trees")
  (depends ocaml dune)
  (tags (wow cool jvb)))
 

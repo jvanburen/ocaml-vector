@@ -407,8 +407,7 @@ let%test_module _ =
       check t;
       [%test_result: int] (length t) ~expect:20;
       print_s [%sexp (t : int debug)];
-      [%expect
-        {|
+      [%expect {|
         (#20: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)) |}]
     ;;
 
@@ -473,8 +472,7 @@ let%test_module _ =
       [%expect {|
         (#10: (11 12 13 14 15 16 17 18 19 20)) |}];
       print_s [%sexp (append l r : int debug)];
-      [%expect
-        {|
+      [%expect {|
         (#20: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)) |}]
     ;;
   end)
