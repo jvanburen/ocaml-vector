@@ -1,5 +1,9 @@
 open! Core
 
+let max_search_error = 2
+let max_width = 4
+let min_width = max_width - (max_search_error / 2)
+
 module With = struct
   module Let_syntax = struct
     module Let_syntax = struct
@@ -34,10 +38,11 @@ let sexp_of_elt (e : elt) = sexp_of_obj (Obj.repr e)
 
 type 'a node =
   { size : int
+  ; width : int
   ; storage : 'a array (* TODO: uniform array *)
   }
 
-let sexp_of_node sexp_of_a { size; storage } =
+let sexp_of_node sexp_of_a { size; width = (_ : int); storage } =
   if size = 0
   then Sexp.unit
   else (
@@ -50,12 +55,19 @@ type 'a wide = 'a array
 
 let width (w : _ wide) = Array.length w
 
-module Dim = struct
+module Dim : sig
+  type _ t = private
+    | One : int -> elt node t
+    | S : int * 'a node t -> 'a node node t
+
+  val one : elt node t
+  val cols : _ t -> int
+  val next : 'a t -> 'a node t
+end = struct
   type _ t =
     | One : int -> elt node t
     | S : int * 'a node t -> 'a node node t
 
-  let max_width = 4
   let one = One 1
 
   let cols (type a) (t : a t) : int =
@@ -86,9 +98,7 @@ let rec sexp_of_btree (Btree (dim, node)) =
 
 let cols = Dim.cols
 let next = Dim.next
-let empty = { size = 0; storage = [||] }
-let max_width = Dim.max_width
-let min_width = Dim.max_width - 1
+let empty = { size = 0; width = 0; storage = [||] }
 let increasing = Array.init (max_width + 1) ~f:Fn.id
 let ( @ ) = Array.append
 let ( += ) r x = r := !r + x
@@ -105,30 +115,37 @@ let length t = t.size
 (*   List.take_while bt ~f:(fun s -> not (String.is_substring s ~substring:"Or_error")) *)
 (* ;; *)
 
-let rec invariant : 't. 't -> strict:bool -> dim:'t dim -> unit =
-  fun (type t) (t : t) ~strict ~(dim : t dim) : unit ->
+let rec invariant : 't. 't node -> dim:'t node dim -> unit =
+  fun (type t) (t : t node) ~(dim : t node dim) : unit ->
    Invariant.invariant
      [%here]
      t
      (fun t -> [%sexp (Btree (dim, t) : btree) (* , (get_backtrace () : string list) *)])
      (fun () ->
-       let check_width t =
-         let width = Array.length t.storage in
-         if strict && not (Int.between width ~low:min_width ~high:max_width)
-         then raise_s [%sexp "badly sized level in tree", ~~(width : int)]
-       in
+       let width = Array.length t.storage in
+       [%test_result: int] t.width ~expect:width;
+       assert (width <= max_width);
        match dim with
-       | One _ ->
-         check_width t;
-         [%test_result: int] t.size ~expect:(Array.length t.storage)
+       | One _ -> [%test_result: int] t.size ~expect:width
        | S (_, dim) ->
-         let width = Array.length t.storage in
-         check_width t;
-         Array.iteri t.storage ~f:(fun i t -> invariant t ~dim ~strict:(i <> width - 1));
+         let p = Array.sum (module Int) t.storage ~f:(fun t -> t.width) in
+         let search_error = width - (((p - 1) / max_width) + 1) in
+         let needs_rebalancing = search_error > max_search_error in
+         assert (not needs_rebalancing);
+         Array.invariant (invariant ~dim) t.storage;
          [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length))
 ;;
 
-let invariant (type t) (t : t) ~(dim : t dim) = invariant t ~dim ~strict:false
+let create (type a) (storage : a array) ~(dim : a node dim) : a node =
+  let size =
+    match dim with
+    | One _ -> Array.length storage
+    | S _ -> Array.sum (module Int) storage ~f:length
+  in
+  let t = { size; width = Array.length storage; storage } in
+  invariant t ~dim;
+  t
+;;
 
 let invariant_wide (type t) (w : t array) ~(dim : t node dim) =
   match dim with
@@ -229,16 +246,7 @@ let rec map : 't. 't node -> f:('a -> 'b) -> dim:'t node dim -> 't node =
 (** peel a non-wide node off the front of a wide node *)
 let lsplit2_wide (type a) (w : a wide) ~(dim : a node dim) : a node * a wide =
   let len = Int.min max_width (width w) in
-  let storage = Array.subo w ~len in
-  let t =
-    { storage
-    ; size =
-        (match dim with
-         | One _ -> Array.length storage
-         | S _ -> Array.sum (module Int) storage ~f:length)
-    }
-  in
-  t, Array.subo w ~pos:len
+  create (Array.subo w ~len) ~dim, Array.subo w ~pos:len
 ;;
 
 (* TODO: use the sizes to construct the new node without so much copying *)
@@ -252,47 +260,41 @@ let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
       | _, 0 -> lhs
       | 0, _ -> rhs
       | lhs_len, rhs_len ->
-        let prefix_len = lhs_len - 1 in
-        let next = ref lhs.(prefix_len).storage in
-        if width !next >= min_width
+        let p =
+          Array.sum (module Int) lhs ~f:(fun t -> t.width)
+          + Array.sum (module Int) rhs ~f:(fun t -> t.width)
+        in
+        let search_error = lhs_len + rhs_len - (((p - 1) / max_width) + 1) in
+        let needs_rebalancing = search_error > max_search_error in
+        if not needs_rebalancing
         then lhs @ rhs
         else (
           (* TODO: determine the length of [storage] in advance by using the sizes or something
              maybe this could be done by keeping track of the sum of widths of the child nodes
           *)
-          let mid = Array.create empty ~len:(1 + rhs_len) in
-          let mid_len = ref 0 in
-          let rhs_pos = ref 0 in
+          let arr = lhs @ rhs in
+          let len = lhs_len + rhs_len in
+          let src_pos = ref 0 in
+          while !src_pos < len && arr.(!src_pos).width >= min_width do
+            incr src_pos
+          done;
+          let dst_pos = ref !src_pos in
+          let next = ref [||] in
+          while
+            !src_pos < len
+            && (width !next + max_width - 1) / max_width = !src_pos - !dst_pos
+          do
+            next := append !next arr.(src_pos.++(1)).storage ~dim
+          done;
           while width !next > 0 do
-            if width !next < min_width && !rhs_pos < rhs_len
-            then next := append !next rhs.(rhs_pos.++(1)).storage ~dim;
-            assert (width !next >= min_width || !rhs_pos >= rhs_len);
             let l, r = lsplit2_wide !next ~dim in
-            mid.(mid_len.++(1)) <- l;
+            arr.(dst_pos.++(1)) <- l;
             next := r
           done;
-          let suffix_len = rhs_len - !rhs_pos in
-          let dst = Array.create empty ~len:(prefix_len + !mid_len + suffix_len) in
-          Array.blit ~src:lhs ~dst ~src_pos:0 ~dst_pos:0 ~len:prefix_len;
-          Array.blit ~src:mid ~dst ~src_pos:0 ~dst_pos:prefix_len ~len:!mid_len;
-          Array.blit
-            ~src:rhs
-            ~dst
-            ~src_pos:!rhs_pos
-            ~dst_pos:(prefix_len + !mid_len)
-            ~len:suffix_len;
-          dst))
-;;
-
-let create (type a) (storage : a array) ~(dim : a node dim) : a node =
-  let size =
-    match dim with
-    | One _ -> Array.length storage
-    | S _ -> Array.sum (module Int) storage ~f:length
-  in
-  let t = { size; storage } in
-  invariant t ~dim;
-  t
+          while !src_pos < len do
+            arr.(dst_pos.++(1)) <- arr.(src_pos.++(1))
+          done;
+          Array.sub arr ~pos:0 ~len:!dst_pos))
 ;;
 
 let append (type a) (t1 : a node) (t2 : a node) ~fill ~(dim : a node dim)
@@ -348,21 +350,11 @@ let rec actual_len : 't. 't node -> dim:'t node dim -> int =
 ;;
 
 let cons (type t) (x : t) (t : t node) ~(dim : t node dim) =
-  let size =
-    match dim with
-    | One _ -> 1
-    | S _ -> x.size
-  in
-  append { size; storage = [| x |] } t ~dim
+  append (create [| x |] ~dim) t ~dim
 ;;
 
 let snoc (type t) (t : t node) (x : t) ~(dim : t node dim) =
-  let size =
-    match dim with
-    | One _ -> 1
-    | S _ -> x.size
-  in
-  append t { size; storage = [| x |] } ~dim
+  append t (create [| x |] ~dim) ~dim
 ;;
 
 let singleton x ~dim = cons x empty ~dim

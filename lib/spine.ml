@@ -11,11 +11,11 @@ end
 type elt = Btree.elt [@@deriving sexp_of]
 type 'a node = 'a Btree.node [@@deriving sexp_of]
 
-type 'a dim = 'a Btree.Dim.t =
+type 'a dim = 'a Btree.Dim.t = private
   | One : int -> elt node dim
   | S : int * 'a node dim -> 'a node node dim
 
-let max_width = Btree.Dim.max_width
+let max_width = Btree.max_width
 let cols = Btree.Dim.cols
 let next = Btree.Dim.next
 let[@inline] ( .+() ) a (i, dim) = Btree.get a i ~dim
