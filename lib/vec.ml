@@ -237,7 +237,9 @@ let concat_map t ~f =
   |> Spine.Builder.to_spine ~dim
 ;;
 
-let concat t = concat_map t ~f:Fn.id
+let concat t =
+  Spine.fold_left t ~init:Spine.empty ~f:(fun x y -> Spine.append x (of_any y) ~dim) ~dim
+;;
 
 include Monad.Make (struct
   type nonrec 'a t = 'a t
@@ -393,22 +395,10 @@ let%test_module _ =
         (#14: (1 2 3 4 5 6 7 8 9 10 11 12 13 14))
         (#15: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))
         (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16))
-        ((size 17)
-         (prefix (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#1: (17))))
-        ((size 18)
-         (prefix (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#2: (17 18))))
-        ((size 19)
-         (prefix (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#3: (17 18 19))))
-        ((size 20)
-         (prefix (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#4: (17 18 19 20)))) |}]
+        (#17: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17))
+        (#18: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18))
+        (#19: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19))
+        (#20: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)) |}]
     ;;
 
     let t = init 20 ~f:succ
@@ -419,10 +409,7 @@ let%test_module _ =
       print_s [%sexp (t : int debug)];
       [%expect
         {|
-        ((size 20)
-         (prefix (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#4: (17 18 19 20)))) |}]
+        (#20: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)) |}]
     ;;
 
     let%expect_test "to_list" =
@@ -439,10 +426,7 @@ let%test_module _ =
       print_s [%sexp (set t 0 1337 : int debug)];
       [%expect
         {|
-        ((size 20)
-         (prefix (#16: (1337 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#4: (17 18 19 20)))) |}]
+        (#20: (1337 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)) |}]
     ;;
 
     let%expect_test "cons" =
@@ -450,10 +434,7 @@ let%test_module _ =
       print_s [%sexp (t : int debug)];
       [%expect
         {|
-        ((size 21)
-         (prefix (#16: (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)))
-         (data (#1: ((#1: (16)))))
-         (suffix (#4: (17 18 19 20)))) |}];
+        (#21: (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
@@ -465,10 +446,7 @@ let%test_module _ =
       print_s [%sexp (t : int debug)];
       [%expect
         {|
-        ((size 21)
-         (prefix (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#5: (17 18 19 20 21)))) |}];
+        (#21: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21)) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
@@ -489,19 +467,15 @@ let%test_module _ =
       let l = init 10 ~f:succ in
       let r = init 10 ~f:(fun x -> x + 11) in
       print_s [%sexp (l : int debug)];
-      [%expect
-        {|
+      [%expect {|
         (#10: (1 2 3 4 5 6 7 8 9 10)) |}];
       print_s [%sexp (r : int debug)];
-      [%expect
-        {|
+      [%expect {|
         (#10: (11 12 13 14 15 16 17 18 19 20)) |}];
       print_s [%sexp (append l r : int debug)];
-      [%expect{|
-        ((size 20)
-         (prefix (#16: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)))
-         (data ())
-         (suffix (#4: (17 18 19 20)))) |}]
+      [%expect
+        {|
+        (#20: (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20)) |}]
     ;;
   end)
 ;;

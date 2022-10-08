@@ -148,7 +148,7 @@ let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
 
 let rec cons : 'a. 'a -> 'a node t -> dim:'a node dim -> 'a node t =
   fun (type a) (elt : a) (t : a node t) ~(dim : a node dim) : a node t ->
-   let%bind.With () = show_in_backtrace "cons" [%here] [ t ] dim in
+   (* let%bind.With () = show_in_backtrace "cons" [%here] [ t ] dim in *)
    let size =
      length t
      +
@@ -185,7 +185,7 @@ let rec cons : 'a. 'a -> 'a node t -> dim:'a node dim -> 'a node t =
 
 let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
   fun (type a) (t : a node t) (elt : a) ~(dim : a node dim) : a node t ->
-   let%bind.With () = show_in_backtrace "snoc" [%here] [ t ] dim in
+   (* let%bind.With () = show_in_backtrace "snoc" [%here] [ t ] dim in *)
    let size =
      length t
      +
@@ -221,9 +221,11 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 
 let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
   fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t ->
-   let%bind.With () = show_in_backtrace "append" [%here] [ t1; t2 ] dim in
-   invariant t1 ~dim;
-   invariant t2 ~dim;
+   (* let%bind.With () = show_in_backtrace "append" [%here] [ t1; t2 ] dim in *)
+   if am_running_test
+   then (
+     invariant t1 ~dim;
+     invariant t2 ~dim);
    let size = length t1 + length t2 in
    match t1, t2 with
    | Base b1, Base b2 ->
@@ -250,7 +252,7 @@ let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
        | Second (lhs, rhs), dim ->
          append (snoc s1.data lhs ~dim) (cons rhs s2.data ~dim) ~dim
      in
-     invariant data ~dim:(next dim);
+     if am_running_test then invariant data ~dim:(next dim);
      Spine { size; prefix = s1.prefix; data; suffix = s2.suffix }
 ;;
 

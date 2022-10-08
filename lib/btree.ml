@@ -1,7 +1,7 @@
 open! Core
 
 let max_search_error = 2
-let max_width = 16
+let max_width = 32
 let min_width = max_width - (max_search_error / 2)
 
 module With = struct
@@ -143,7 +143,7 @@ let create (type a) (storage : a array) ~(dim : a node dim) : a node =
     | S _ -> Array.sum (module Int) storage ~f:length
   in
   let t = { size; width = Array.length storage; storage } in
-  invariant t ~dim;
+  if am_running_test then invariant t ~dim;
   t
 ;;
 
@@ -300,9 +300,9 @@ let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
 let append (type a) (t1 : a node) (t2 : a node) ~fill ~(dim : a node dim)
   : (a node, a node * a node) Either.t
   =
-  let%bind.With () = show_in_backtrace "append" [%here] [ t1; t2 ] dim in
+  (* let%bind.With () = show_in_backtrace "append" [%here] [ t1; t2 ] dim in *)
   let appended = append t1.storage t2.storage ~dim in
-  invariant_wide appended ~dim;
+  if am_running_test then invariant_wide appended ~dim;
   let len = Array.length appended in
   if len <= max_width
   then First (create appended ~dim)
@@ -322,11 +322,13 @@ let append (type a) (t1 : a node) (t2 : a node) ~fill ~(dim : a node dim)
 
 let append (type a) (t1 : a node) (t2 : a node) ~fill ~(dim : a node dim) =
   let t = append t1 t2 ~fill ~dim in
-  [%test_result: int]
-    (match t with
-     | First t -> length t
-     | Second (t1, t2) -> length t1 + length t2)
-    ~expect:(length t1 + length t2);
+  if am_running_test
+  then
+    [%test_result: int]
+      (match t with
+       | First t -> length t
+       | Second (t1, t2) -> length t1 + length t2)
+      ~expect:(length t1 + length t2);
   t
 ;;
 
