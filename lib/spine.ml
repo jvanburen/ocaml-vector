@@ -1,6 +1,6 @@
 open! Core
 
-type elt = Btree.elt
+type elt = Btree.elt [@@deriving sexp_of]
 type 'a node = 'a Btree.node [@@deriving sexp_of]
 
 type 'a dim = 'a Btree.Dim.t =
@@ -33,6 +33,21 @@ let rec sexp_of_t : 'arr. ('arr -> Sexp.t) -> 'arr t -> Sexp.t =
      [%sexp { size : int; prefix : arr; data : arr node t; suffix : arr }]
 ;;
 
+type spine = Sp : 'a node dim * 'a node t -> spine
+
+let rec sexp_of_spine (Sp (dim, t)) =
+  match t with
+  | Base data -> [%sexp Base (Btree (dim, data) : Btree.btree)]
+  | Spine { size; prefix; suffix; data } ->
+    [%sexp
+      Spine
+        { size : int
+        ; prefix = (Btree (dim, prefix) : Btree.btree)
+        ; data = (Sp (next dim, data) : spine)
+        ; suffix = (Btree (dim, suffix) : Btree.btree)
+        }]
+;;
+
 let empty = Base Btree.empty
 
 let length (type a) (t : a t) =
@@ -43,15 +58,20 @@ let length (type a) (t : a t) =
 
 let rec invariant : 'a. 'a node t -> dim:'a node dim -> unit =
   fun (type a) (t : a node t) ~(dim : a node dim) : unit ->
-   match t with
-   | Base tree -> Btree.invariant tree ~dim
-   | Spine { size; prefix; data; suffix } ->
-     Btree.invariant prefix ~dim;
-     invariant data ~dim:(next dim);
-     Btree.invariant suffix ~dim;
-     [%test_result: int]
-       size
-       ~expect:(Btree.length prefix + length data + Btree.length suffix)
+   Invariant.invariant
+     [%here]
+     (Sp (dim, t))
+     [%sexp_of: spine]
+     (fun () ->
+       match t with
+       | Base tree -> Btree.invariant tree ~dim
+       | Spine { size; prefix; data; suffix } ->
+         Btree.invariant prefix ~dim;
+         invariant data ~dim:(next dim);
+         Btree.invariant suffix ~dim;
+         [%test_result: int]
+           size
+           ~expect:(Btree.length prefix + length data + Btree.length suffix))
 ;;
 
 let spine ~prefix ~data ~suffix =
@@ -244,6 +264,7 @@ let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
        | Second (lhs, rhs), dim ->
          append (snoc s1.data lhs ~dim) (cons rhs s2.data ~dim) ~dim
      in
+     invariant data ~dim:(next dim);
      Spine { size; prefix = s1.prefix; data; suffix = s2.suffix }
 ;;
 

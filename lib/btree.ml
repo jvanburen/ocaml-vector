@@ -22,6 +22,8 @@ type elt = private
   | Immediate
   | Not_a_float of int
 
+let sexp_of_elt (e : elt) = sexp_of_obj (Obj.repr e)
+
 type 'a node =
   { size : int
   ; storage : 'a array (* TODO: uniform array *)
@@ -55,6 +57,17 @@ module Dim = struct
 end
 
 type 'a dim = 'a Dim.t
+type btree = Btree : 'a dim * 'a -> btree
+
+let rec sexp_of_btree (Btree (dim, node)) =
+  match dim with
+  | One _ -> [%sexp (node : elt node)]
+  | S (_, dim) ->
+    let node =
+      { node with storage = Array.map node.storage ~f:(fun node -> Btree (dim, node)) }
+    in
+    [%sexp (node : btree node)]
+;;
 
 let cols = Dim.cols
 let next = Dim.next
@@ -65,6 +78,26 @@ let increasing = Array.init (max_width + 1) ~f:Fn.id
 let ( @ ) = Array.append
 let ( += ) r x = r := !r + x
 let ( -= ) r x = r := !r - x
+let length t = t.size
+
+let rec invariant : 't. 't -> strict:bool -> dim:'t dim -> unit =
+  fun (type t) (t : t) ~strict ~(dim : t dim) : unit ->
+   Invariant.invariant
+     [%here]
+     t
+     (fun t -> [%sexp (Btree (dim, t) : btree)])
+     (fun () ->
+       match dim with
+       | One _ -> [%test_result: int] t.size ~expect:(Array.length t.storage)
+       | S (_, dim) ->
+         let width = Array.length t.storage in
+         if strict && not (Int.between width ~low:min_width ~high:max_width)
+         then raise_s [%sexp "badly sized level in tree", ~~(width : int)];
+         Array.iteri t.storage ~f:(fun i t -> invariant t ~dim ~strict:(i <> width - 1));
+         [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length))
+;;
+
+let invariant (type t) (t : t) ~(dim : t dim) = invariant t ~dim ~strict:false
 
 (** post-increment *)
 let ( .++() ) r amount =
@@ -139,8 +172,6 @@ let rec map : 't. 't node -> f:('a -> 'b) -> dim:'t node dim -> 't node =
    | One _ -> { t with storage = Array.map t.storage ~f }
    | S (_, dim) -> { t with storage = Array.map t.storage ~f:(fun t -> map t ~f ~dim) }
 ;;
-
-let length t = t.size
 
 (* let evenly_distribute (type a) (t : a node) : a node = *)
 (*   let flat = *)
@@ -244,24 +275,37 @@ let append (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim)
          let both = t1.storage @ t2.storage in
          let lhs = Array.subo both ~len:i in
          let rhs = Array.subo both ~pos:i in
-         let lhs = { size = max_width; (* prefix_sizes = increasing; *) storage = lhs } in
+         let lhs =
+           { size = Array.length lhs; (* prefix_sizes = increasing; *) storage = lhs }
+         in
          let rhs =
-           let size = w2 - (max_width - w1) in
-           { size (* ; prefix_sizes = Array.subo increasing ~len:(size + 1) *)
+           { size =
+               Array.length
+                 rhs (* ; prefix_sizes = Array.subo increasing ~len:(size + 1) *)
            ; storage = rhs
            }
          in
+         invariant lhs ~dim;
+         invariant rhs ~dim;
          Second (lhs, rhs)))
   | S (_, dim) ->
     (* TODO: lots of ways to special case and avoid recomputing sizes *)
     let appended = append t1.storage t2.storage ~dim in
+    Array.invariant (invariant ~dim) appended;
     let len = Array.length appended in
     if len <= max_width
     then (
-      let prefix_sizes = Array.create 0 ~len:(len + 1) in
-      Array.iteri appended ~f:(fun i node ->
-        prefix_sizes.(i + 1) <- prefix_sizes.(i) + node.size);
-      First { storage = appended; size = prefix_sizes.(len) (* ; prefix_sizes *) })
+      let storage = appended in
+      (* let prefix_sizes = Array.create 0 ~len:(len + 1) in *)
+      (* Array.iteri appended ~f:(fun i node -> *)
+      (*   prefix_sizes.(i + 1) <- prefix_sizes.(i) + node.size); *)
+      let size = Array.sum (module Int) storage ~f:length in
+      First
+        { storage
+        ; size
+          (* = prefix_sizes.(len) *)
+          (* ; prefix_sizes *)
+        })
     else (
       assert (len <= max_width * 2);
       let max_width = len / 2 in
@@ -391,31 +435,4 @@ let to_sequence (type t) (t : t node) ~(dim : t node dim) : elt Sequence.t =
     match finger with
     | Top -> Done
     | Finger { pos; arr; _ } as f -> Yield (arr.storage.(pos), next_finger f ~dim:Dim.one))
-;;
-
-let rec invariant : 't. 't -> dim:'t dim -> unit =
-  fun (type t) (t : t) ~(dim : t dim) : unit ->
-   match dim with
-   | One _ -> [%test_result: int] t.size ~expect:(Array.length t.storage)
-   | S (_, dim) ->
-     let width = Array.length t.storage in
-     if not (Int.between width ~low:min_width ~high:max_width)
-     then
-       raise_s
-         [%sexp "badly sized level in tree", (sexp_of_obj (Obj.repr t.storage) : Sexp.t)];
-     Array.invariant (invariant ~dim) t.storage;
-     [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length)
-;;
-
-let invariant (type t) (t : t) ~(dim : t dim) =
-  Invariant.invariant
-    [%here]
-    t
-    (fun t -> sexp_of_obj (Obj.repr t))
-    (fun () ->
-      match dim with
-      | One _ -> [%test_result: int] t.size ~expect:(Array.length t.storage)
-      | S (_, dim) ->
-        Array.invariant (invariant ~dim) t.storage;
-        [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length))
 ;;
