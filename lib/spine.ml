@@ -1,5 +1,13 @@
 open! Core
 
+module With = struct
+  module Let_syntax = struct
+    module Let_syntax = struct
+      let bind t ~f = t f
+    end
+  end
+end
+
 type elt = Btree.elt [@@deriving sexp_of]
 type 'a node = 'a Btree.node [@@deriving sexp_of]
 
@@ -74,6 +82,18 @@ let rec invariant : 'a. 'a node t -> dim:'a node dim -> unit =
            ~expect:(Btree.length prefix + length data + Btree.length suffix))
 ;;
 
+let show_in_backtrace name here ts dim f =
+  try
+    let t = f () in
+    invariant t ~dim;
+    t
+  with
+  | exn ->
+    let ts = List.map ts ~f:(fun t -> Sp (dim, t)) in
+    let name = sprintf !"%s[%{Source_code_position}]" name here in
+    raise_s [%sexp (name : string), (ts : spine list), "raised", (exn : Exn.t)]
+;;
+
 let spine ~prefix ~data ~suffix =
   let size = Btree.length prefix + length data + Btree.length suffix in
   Spine { size; prefix; data; suffix }
@@ -113,8 +133,22 @@ let rec set : 'a. 'a node t -> int -> elt -> dim:'a node dim -> 'a node t =
          | Some i -> Spine { s with suffix = s.suffix.+(i, dim) <- elt }))
 ;;
 
+let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
+  fun (type a) (t : a node t) ~(f : elt -> elt) ~(dim : a node dim) : a node t ->
+   match t with
+   | Base b -> if Btree.length b = 0 then t else Base (Btree.map b ~f ~dim)
+   | Spine { size; prefix; data; suffix } ->
+     Spine
+       { size
+       ; prefix = Btree.map prefix ~f ~dim
+       ; data = map data ~f ~dim:(next dim)
+       ; suffix = Btree.map suffix ~f ~dim
+       }
+;;
+
 let rec cons : 'a. 'a -> 'a node t -> dim:'a node dim -> 'a node t =
   fun (type a) (elt : a) (t : a node t) ~(dim : a node dim) : a node t ->
+   let%bind.With () = show_in_backtrace "cons" [%here] [ t ] dim in
    let size =
      length t
      +
@@ -124,26 +158,34 @@ let rec cons : 'a. 'a -> 'a node t -> dim:'a node dim -> 'a node t =
    in
    match t with
    | Base data ->
-     if Array.length data.storage < max_width - 2
-     then (
-       let data = Btree.cons elt data ~dim in
-       Base data)
-     else
-       (* TODO: should this really be in suffix? why not data? *)
-       Spine { prefix = Btree.singleton elt ~dim; data = empty; suffix = data; size }
+     (match Btree.cons elt data ~fill:`Split ~dim with
+      | First data -> Base data
+      | Second (x, y) -> Spine { prefix = x; data = empty; suffix = y; size })
+     (* if Array.length data.storage < max_width - 2 *)
+     (* then ( *)
+     (*   let data =  in *)
+     (*   Base data) *)
+     (* else *)
+     (*   (\* TODO: should this really be in suffix? why not data? *\) *)
+     (*   Spine { prefix = Btree.singleton elt ~dim; data = empty; suffix = data; size } *)
    | Spine s ->
-     if Array.length s.prefix.storage < max_width
-     then (
-       let prefix = Btree.cons elt s.prefix ~dim in
-       Spine { s with size; prefix })
-     else (
-       let prefix = Btree.singleton elt ~dim in
-       Spine
-         { prefix; data = cons s.prefix s.data ~dim:(next dim); suffix = s.suffix; size })
+     (* if Array.length s.prefix.storage < max_width *)
+     (* then ( *)
+     (*   let prefix = Btree.cons elt s.prefix ~dim in *)
+     (*   Spine { s with size; prefix }) *)
+     (* else ( *)
+     (*   let prefix = Btree.singleton elt ~dim in *)
+     (*   Spine *)
+     (*     { prefix; data = cons s.prefix s.data ~dim:(next dim); suffix = s.suffix; size }) *)
+     (match Btree.cons elt s.prefix ~fill:`Right ~dim with
+      | First prefix -> Spine { size; prefix; data = s.data; suffix = s.suffix }
+      | Second (prefix, lhs) ->
+        Spine { prefix; data = cons lhs s.data ~dim:(next dim); suffix = s.suffix; size })
 ;;
 
 let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
   fun (type a) (t : a node t) (elt : a) ~(dim : a node dim) : a node t ->
+   let%bind.With () = show_in_backtrace "snoc" [%here] [ t ] dim in
    let size =
      length t
      +
@@ -153,130 +195,63 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
    in
    match t with
    | Base data ->
-     if Array.length data.storage < max_width - 2
-     then Base (Btree.snoc data elt ~dim)
-     else (
-       (* TODO: should this really be in suffix? why not data? *)
-       let suffix = Btree.singleton elt ~dim in
-       Spine { prefix = data; data = empty; suffix; size })
+     (* if Array.length data.storage < max_width - 2 *)
+     (* then Base (Btree.snoc data elt ~dim) *)
+     (* else ( *)
+     (*   (\* TODO: should this really be in suffix? why not data? *\) *)
+     (*   let suffix = Btree.singleton elt ~dim in *)
+     (*   Spine { prefix = data; data = empty; suffix; size }) *)
+     (match Btree.snoc data elt ~fill:`Split ~dim with
+      | First data -> Base data
+      | Second (prefix, suffix) -> Spine { size; prefix; suffix; data = empty })
    | Spine s ->
-     if Array.length s.suffix.storage < max_width
-     then (
-       let suffix = Btree.snoc s.suffix elt ~dim in
-       Spine { s with size; suffix })
-     else (
-       let suffix = Btree.singleton elt ~dim in
-       Spine
-         { prefix = s.prefix; data = snoc s.data s.suffix ~dim:(next dim); suffix; size })
+     (* if Array.length s.suffix.storage < max_width *)
+     (* then ( *)
+     (*   let suffix = Btree.snoc s.suffix elt ~dim in *)
+     (*   Spine { s with size; suffix }) *)
+     (* else ( *)
+     (*   let suffix = Btree.singleton elt ~dim in *)
+     (*   Spine *)
+     (*     { prefix = s.prefix; data = snoc s.data s.suffix ~dim:(next dim); suffix; size }) *)
+     (match Btree.snoc s.suffix elt ~fill:`Right ~dim with
+      | First suffix -> Spine { size; prefix = s.prefix; data = s.data; suffix }
+      | Second (rhs, suffix) ->
+        Spine { prefix = s.prefix; data = snoc s.data rhs ~dim:(next dim); suffix; size })
 ;;
-
-(* let rec append_tree_widths : 'a. 'a node -> 'a node  -> dim:'a node dim -> 'a node = *)
-(*   fun (type a) (t1 : a Btree.wide) (t2 : a Btree.wide) ~(dim : a node dim) : a node -> *)
-(*   let w1 = Btree.width t1 *)
-(*   and w2 = Btree.width t2 in *)
-(*   match dim with *)
-(*   | One _ -> *)
-(*     let total_width = Btree.width t1 + Btree.width t2 in *)
-(*     if total_width <= max_width then [| total_width |] else [| max_width; total_width - max_width|] *)
-(*   | Many (_, dim) -> *)
-(*     if Array.is_empty t1.storage then t2.prefix_sizes  *)
-(*     else if Array.is_empty t2.storage then t1.prefix_sizes else *)
-(*       let sizes = Array.create 0 ~len:(w1 + w2) in *)
-(*       Array.blito ~src:t1.prefix_sizes ~dst:sizes(); *)
-(*       let dst_pos = ref w1 in *)
-(*       let last_size = ref (Btree.length t1) in *)
-(*       let last_width = ref (Btree.width t1.storage.(Btree.width t1 - 1)) in *)
-(*       for i = 0 to Btree.width t2 - 1 do *)
-(*         let w = Btree.width t2.storage.(i) in *)
-(*         if !last_width + w > max_width then ( *)
-(*           sizes.(!dst_pos) <- last_size + *)
-(*           last_width := !last_width + w - max_width; *)
-(*         ) *)
-(*       done *)
-
-(*       Array.iteri t2.storage ~f:() *)
-(*       while !src_pos < Btree.width t2 do *)
-
-(*       let dst = Array.create 0 ~len:() in *)
-(*     Array.blito ~src:t1.prefix_sizes ~dst; *)
-(*     let last_size = ref (Btree.width t1) in *)
-(*     let dst = ref (Btree.width t1) in *)
-
-(*   (\*   let rec append_trees : 'a. 'a node -> 'a node -> dim:'a node dim -> 'a node t = *\) *)
-(*   (\* fun (type a) (t1 : a node) (t2 : a node) ~(dim : a node dim) : a node t -> *\) *)
-(*   (\* match dim with *\) *)
-(*   (\* | One _ -> *\) *)
-
-(* ;; *)
-
-(* let rec of_trees : 'a. 'a node -> dim:'a node dim -> 'a node t = *)
-(*   fun (type a) (tree : a node) ~(dim : a node dim) : a node t -> *)
-(*    let width = Array.length tree.storage in *)
-(*    if width <= max_width - 2 *)
-(*    then Base tree *)
-(*    else ( *)
-(*      match dim with *)
-(*      | One _ -> Base tree *)
-(*      | S (_, dim) -> *)
-(*        let mid = width / 2 in *)
-(*        let size = Btree.length tree in *)
-(*        let prefix = *)
-(*          Array.sub *)
-(*          tree.storage.(0) in *)
-(*        let suffix = tree.storage.(width - 1) in *)
-(*        let data = *)
-(*          of_trees *)
-(*            { size = size - Btree.length prefix - Btree.length suffix *)
-(*            ; storage = Array.sub tree.storage ~pos:1 ~len:(width - 2) *)
-(*            } *)
-(*            ~dim *)
-(*        in *)
-(*        Spine { prefix; suffix; size; data }) *)
-(* ;; *)
 
 let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
   fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t ->
+   let%bind.With () = show_in_backtrace "append" [%here] [ t1; t2 ] dim in
    invariant t1 ~dim;
    invariant t2 ~dim;
    let size = length t1 + length t2 in
    match t1, t2 with
    | Base b1, Base b2 ->
-     (match Btree.append b1 b2 ~dim with
+     (match Btree.append b1 b2 ~fill:`Split ~dim with
       | First b -> Base b
       | Second (prefix, suffix) -> Spine { size; prefix; data = empty; suffix })
    | Base b1, Spine s2 ->
-     (match Btree.append b1 s2.prefix ~dim with
+     (match Btree.append b1 s2.prefix ~fill:`Right ~dim with
       | First prefix -> Spine { s2 with size; prefix }
       | Second (prefix, lhs) ->
         Spine
           { size; prefix; data = cons lhs s2.data ~dim:(next dim); suffix = s2.suffix })
    | Spine s1, Base b2 ->
-     (match Btree.append s1.suffix b2 ~dim with
+     (match Btree.append s1.suffix b2 ~fill:`Left ~dim with
       | First suffix -> Spine { s1 with size; suffix }
       | Second (rhs, suffix) ->
         Spine
-          { size; prefix = s1.prefix; suffix; data = snoc s1.data rhs ~dim:(next dim) })
+          { size; prefix = s1.prefix; data = snoc s1.data rhs ~dim:(next dim); suffix })
    | Spine s1, Spine s2 ->
      (* TODO: special cases *)
      let data =
-       match Btree.append s1.suffix s2.prefix ~dim, next dim with
+       match Btree.append s1.suffix s2.prefix ~fill:`Right ~dim, next dim with
        | First mid, dim -> append (snoc s1.data mid ~dim) s2.data ~dim
        | Second (lhs, rhs), dim ->
          append (snoc s1.data lhs ~dim) (cons rhs s2.data ~dim) ~dim
      in
      invariant data ~dim:(next dim);
      Spine { size; prefix = s1.prefix; data; suffix = s2.suffix }
-;;
-
-let rec map : 'a. 'a node t -> f:(elt -> elt) -> dim:'a node dim -> 'a node t =
-  fun (type a) (t : a node t) ~(f : elt -> elt) ~(dim : a node dim) : a node t ->
-   match t with
-   | Base b -> if Btree.length b = 0 then t else Base (Btree.map b ~f ~dim)
-   | Spine s ->
-     let prefix = Btree.map s.prefix ~f ~dim in
-     let data = map s.data ~f ~dim:(next dim) in
-     let suffix = Btree.map s.suffix ~f ~dim in
-     Spine { s with prefix; data; suffix }
 ;;
 
 (* let rec rev : 'a. 'a node t -> dim:'a node dim -> 'a node t = *)

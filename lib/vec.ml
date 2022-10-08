@@ -264,6 +264,8 @@ let%test_module _ =
 
     type 'a debug = 'a t
 
+    let quickcheck_generator_int = Int.gen_incl 0 9
+
     let sexp_of_debug (type a) (sexp_of_a : a -> Sexp.t) (t : a debug) =
       let sexp_of_any : any -> Sexp.t = Obj.magic sexp_of_a in
       [%sexp (t : any node Spine.t)]
@@ -282,24 +284,24 @@ let%test_module _ =
       test_result t ~expect:(to_list t)
     ;;
 
-    let%test_unit "list conversions" =
+    let%expect_test "list conversions" =
       Quickcheck.test [%quickcheck.generator: int list] ~f:(fun l ->
         [%test_result: int list] (to_list (of_list l)) ~expect:l)
     ;;
 
-    let%test_unit "array conversions" =
+    let%expect_test "array conversions" =
       Quickcheck.test [%quickcheck.generator: int array] ~f:(fun a ->
         [%test_result: int array] (to_array (of_array a)) ~expect:a)
     ;;
 
-    let%test_unit "init" =
+    let%expect_test "init" =
       Quickcheck.test [%quickcheck.generator: int array] ~f:(fun a ->
         [%test_result: int array]
           (to_array (init (Array.length a) ~f:(Array.get a)))
           ~expect:a)
     ;;
 
-    let%test_unit "concat_map" =
+    let%expect_test "concat_map" =
       Quickcheck.test
         [%quickcheck.generator: int list * (int -> int list)]
         ~f:(fun (l, f) ->
@@ -309,16 +311,14 @@ let%test_module _ =
           ~expect:(List.concat_map l ~f))
     ;;
 
-    (* let%test_unit "append" = *)
-    (*   Quickcheck.test [%quickcheck.generator: int t * int t] ~f:(fun (t1, t2) -> *)
-    (*     [%test_result: int list] (to_list (append t1 t2)) ~expect:(to_list t1 @ to_list t2)) *)
-    (* ;; *)
+    let%expect_test "append" =
+      Quickcheck.test [%quickcheck.generator: int t * int t] ~f:(fun (t1, t2) ->
+        [%test_result: int list] (to_list (append t1 t2)) ~expect:(to_list t1 @ to_list t2))
+    ;;
 
-    let quickcheck_generator_i = Int.gen_incl 0 9
-
-    let%test_unit "append" =
+    let%expect_test "append" =
       Quickcheck.test
-        [%quickcheck.generator: i list * i list]
+        [%quickcheck.generator: int list * int list]
         ~shrinker:[%quickcheck.shrinker: int list * int list]
         ~sexp_of:[%sexp_of: int list * int list]
         ~f:(fun (l1, l2) ->
@@ -326,12 +326,15 @@ let%test_module _ =
         check t1;
         let t2 = of_list l2 in
         check t2;
-        let t = append t1 t2 in
-        check t;
-        [%test_result: int list] (to_list t) ~expect:(l1 @ l2))
+        Exn.reraise_uncaught
+          (Sexp.to_string_hum [%sexp ~~(t1 : int debug), ~~(t2 : int debug)])
+          (fun () ->
+            let t = append t1 t2 in
+            check t;
+            [%test_result: int list] (to_list t) ~expect:(l1 @ l2)))
     ;;
 
-    let%test_unit "rev" =
+    let%expect_test "rev" =
       Quickcheck.test [%quickcheck.generator: int t] ~f:(fun t ->
         [%test_result: int list] (to_list (rev t)) ~expect:(List.rev (to_list t)))
     ;;
@@ -359,24 +362,135 @@ let%test_module _ =
       in
       [%expect
         {|
-        ((size 1) (storage (a)))
-        ((size 2) (storage (a b)))
-        ((size 3)
-         (prefix ((size 2) (storage (a b))))
-         (data ((size 0) (storage ())))
-         (suffix ((size 1) (storage (c)))))
-        ((size 4)
-         (prefix ((size 2) (storage (a b))))
-         (data ((size 0) (storage ())))
-         (suffix ((size 2) (storage (c d)))))
-        ((size 5)
-         (prefix ((size 2) (storage (a b))))
-         (data ((size 0) (storage ())))
-         (suffix ((size 3) (storage (c d e)))))
-        ((size 6)
-         (prefix ((size 2) (storage (a b))))
-         (data ((size 0) (storage ())))
-         (suffix ((size 4) (storage (c d e f))))) |}]
+        (#1: (a))
+        (#2: (a b))
+        (#3: (a b c))
+        (#4: (a b c d))
+        ((size 5) (prefix (#2: (a b))) (data ()) (suffix (#3: (c d e))))
+        ((size 6) (prefix (#2: (a b))) (data ()) (suffix (#4: (c d e f)))) |}]
+    ;;
+
+    let%expect_test "init" =
+      for i = 0 to 20 do
+        print_s [%sexp (init i ~f:succ : int debug)]
+      done;
+      [%expect
+        {|
+        ()
+        (#1: (1))
+        (#2: (1 2))
+        (#3: (1 2 3))
+        (#4: (1 2 3 4))
+        ((size 5) (prefix (#2: (1 2))) (data ()) (suffix (#3: (3 4 5))))
+        ((size 6) (prefix (#2: (1 2))) (data ()) (suffix (#4: (3 4 5 6))))
+        ((size 7)
+         (prefix (#2: (1 2)))
+         (data (#1: ((#1: (3)))))
+         (suffix (#4: (4 5 6 7))))
+        ((size 8)
+         (prefix (#2: (1 2)))
+         (data (#2: ((#2: (3 4)))))
+         (suffix (#4: (5 6 7 8))))
+        ((size 9)
+         (prefix (#2: (1 2)))
+         (data (#3: ((#3: (3 4 5)))))
+         (suffix (#4: (6 7 8 9))))
+        ((size 10)
+         (prefix (#2: (1 2)))
+         (data (#4: ((#3: (3 4 5)) (#1: (6)))))
+         (suffix (#4: (7 8 9 10))))
+        ((size 11)
+         (prefix (#2: (1 2)))
+         (data (#5: ((#3: (3 4 5)) (#2: (6 7)))))
+         (suffix (#4: (8 9 10 11))))
+        ((size 12)
+         (prefix (#2: (1 2)))
+         (data (
+           #6: (
+             (#3: (3 4 5))
+             (#3: (6 7 8)))))
+         (suffix (#4: (9 10 11 12))))
+        ((size 13)
+         (prefix (#2: (1 2)))
+         (data (
+           #7: (
+             (#3: (3 4 5))
+             (#3: (6 7 8))
+             (#1: (9)))))
+         (suffix (#4: (10 11 12 13))))
+        ((size 14)
+         (prefix (#2: (1 2)))
+         (data (
+           #8: (
+             (#3: (3 4 5))
+             (#3: (6 7 8))
+             (#2: (9 10)))))
+         (suffix (#4: (11 12 13 14))))
+        ((size 15)
+         (prefix (#2: (1 2)))
+         (data (
+           #9: (
+             (#3: (3 4  5))
+             (#3: (6 7  8))
+             (#3: (9 10 11)))))
+         (suffix (#4: (12 13 14 15))))
+        ((size 16)
+         (prefix (#2: (1 2)))
+         (data (
+           #10: (
+             (#3: (3 4  5))
+             (#3: (6 7  8))
+             (#3: (9 10 11))
+             (#1: (12)))))
+         (suffix (#4: (13 14 15 16))))
+        ((size 17)
+         (prefix (#2: (1 2)))
+         (data (
+           #11: (
+             (#3: (3 4  5))
+             (#3: (6 7  8))
+             (#3: (9 10 11))
+             (#2: (12 13)))))
+         (suffix (#4: (14 15 16 17))))
+        ((size 18)
+         (prefix (#2: (1 2)))
+         (data (
+           #12: (
+             (#3: (3  4  5))
+             (#3: (6  7  8))
+             (#3: (9  10 11))
+             (#3: (12 13 14)))))
+         (suffix (#4: (15 16 17 18))))
+        ((size 19)
+         (prefix (#2: (1 2)))
+         (data (
+           (size 13)
+           (prefix (
+             #6: (
+               (#3: (3 4 5))
+               (#3: (6 7 8)))))
+           (data ())
+           (suffix (
+             #7: (
+               (#3: (9  10 11))
+               (#3: (12 13 14))
+               (#1: (15)))))))
+         (suffix (#4: (16 17 18 19))))
+        ((size 20)
+         (prefix (#2: (1 2)))
+         (data (
+           (size 14)
+           (prefix (
+             #6: (
+               (#3: (3 4 5))
+               (#3: (6 7 8)))))
+           (data ())
+           (suffix (
+             #8: (
+               (#3: (9  10 11))
+               (#3: (12 13 14))
+               (#2: (15 16)))))))
+         (suffix (#4: (17 18 19 20)))) |}]
     ;;
 
     let t = init 20 ~f:succ
@@ -388,18 +502,20 @@ let%test_module _ =
       [%expect
         {|
         ((size 20)
-         (prefix ((size 2) (storage (1 2))))
+         (prefix (#2: (1 2)))
          (data (
-           (size 16)
+           (size 14)
            (prefix (
-             (size 8)
-             (storage (((size 4) (storage (3 4 5 6))) ((size 4) (storage (7 8 9 10)))))))
-           (data ((size 0) (storage ())))
+             #6: (
+               (#3: (3 4 5))
+               (#3: (6 7 8)))))
+           (data ())
            (suffix (
-             (size 8)
-             (storage (
-               ((size 4) (storage (11 12 13 14))) ((size 4) (storage (15 16 17 18)))))))))
-         (suffix ((size 2) (storage (19 20))))) |}]
+             #8: (
+               (#3: (9  10 11))
+               (#3: (12 13 14))
+               (#2: (15 16)))))))
+         (suffix (#4: (17 18 19 20)))) |}]
     ;;
 
     let%expect_test "to_list" =
@@ -417,18 +533,20 @@ let%test_module _ =
       [%expect
         {|
         ((size 20)
-         (prefix ((size 2) (storage (1337 2))))
+         (prefix (#2: (1337 2)))
          (data (
-           (size 16)
+           (size 14)
            (prefix (
-             (size 8)
-             (storage (((size 4) (storage (3 4 5 6))) ((size 4) (storage (7 8 9 10)))))))
-           (data ((size 0) (storage ())))
+             #6: (
+               (#3: (3 4 5))
+               (#3: (6 7 8)))))
+           (data ())
            (suffix (
-             (size 8)
-             (storage (
-               ((size 4) (storage (11 12 13 14))) ((size 4) (storage (15 16 17 18)))))))))
-         (suffix ((size 2) (storage (19 20))))) |}]
+             #8: (
+               (#3: (9  10 11))
+               (#3: (12 13 14))
+               (#2: (15 16)))))))
+         (suffix (#4: (17 18 19 20)))) |}]
     ;;
 
     let%expect_test "cons" =
@@ -437,18 +555,20 @@ let%test_module _ =
       [%expect
         {|
         ((size 21)
-         (prefix ((size 3) (storage (0 1 2))))
+         (prefix (#3: (0 1 2)))
          (data (
-           (size 16)
+           (size 14)
            (prefix (
-             (size 8)
-             (storage (((size 4) (storage (3 4 5 6))) ((size 4) (storage (7 8 9 10)))))))
-           (data ((size 0) (storage ())))
+             #6: (
+               (#3: (3 4 5))
+               (#3: (6 7 8)))))
+           (data ())
            (suffix (
-             (size 8)
-             (storage (
-               ((size 4) (storage (11 12 13 14))) ((size 4) (storage (15 16 17 18)))))))))
-         (suffix ((size 2) (storage (19 20))))) |}];
+             #8: (
+               (#3: (9  10 11))
+               (#3: (12 13 14))
+               (#2: (15 16)))))))
+         (suffix (#4: (17 18 19 20)))) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
@@ -461,18 +581,20 @@ let%test_module _ =
       [%expect
         {|
         ((size 21)
-         (prefix ((size 2) (storage (1 2))))
+         (prefix (#2: (1 2)))
          (data (
-           (size 16)
+           (size 15)
            (prefix (
-             (size 8)
-             (storage (((size 4) (storage (3 4 5 6))) ((size 4) (storage (7 8 9 10)))))))
-           (data ((size 0) (storage ())))
+             #6: (
+               (#3: (3 4 5))
+               (#3: (6 7 8)))))
+           (data ())
            (suffix (
-             (size 8)
-             (storage (
-               ((size 4) (storage (11 12 13 14))) ((size 4) (storage (15 16 17 18)))))))))
-         (suffix ((size 3) (storage (19 20 21))))) |}];
+             #9: (
+               (#3: (9  10 11))
+               (#3: (12 13 14))
+               (#3: (15 16 17)))))))
+         (suffix (#4: (18 19 20 21)))) |}];
       [%test_result: int] (length t) ~expect:21;
       check t;
       print_s [%sexp (t : int t)];
@@ -496,29 +618,29 @@ let%test_module _ =
       [%expect
         {|
         ((size 10)
-         (prefix ((size 2) (storage (1 2))))
-         (data ((size 4) (storage (((size 4) (storage (3 4 5 6)))))))
-         (suffix ((size 4) (storage (7 8 9 10))))) |}];
+         (prefix (#2: (1 2)))
+         (data (#4: ((#3: (3 4 5)) (#1: (6)))))
+         (suffix (#4: (7 8 9 10)))) |}];
       print_s [%sexp (r : int debug)];
       [%expect
         {|
         ((size 10)
-         (prefix ((size 2) (storage (11 12))))
-         (data ((size 4) (storage (((size 4) (storage (13 14 15 16)))))))
-         (suffix ((size 4) (storage (17 18 19 20))))) |}];
+         (prefix (#2: (11 12)))
+         (data (#4: ((#3: (13 14 15)) (#1: (16)))))
+         (suffix (#4: (17 18 19 20)))) |}];
       print_s [%sexp (append l r : int debug)];
-      [%expect
-        {|
+      [%expect{|
         ((size 20)
-         (prefix ((size 2) (storage (1 2))))
+         (prefix (#2: (1 2)))
          (data (
            (size 14)
-           (storage (
-             ((size 4) (storage (3 4 5 6)))
-             ((size 4) (storage (7 8 9 10)))
-             ((size 2) (storage (11 12)))
-             ((size 4) (storage (13 14 15 16)))))))
-         (suffix ((size 4) (storage (17 18 19 20))))) |}]
+           (prefix (
+             #6: (
+               (#3: (3 4 5))
+               (#3: (6 7 8)))))
+           (data ())
+           (suffix (#8: ((#4: (9 10 11 12)) (#3: (13 14 15)) (#1: (16)))))))
+         (suffix (#4: (17 18 19 20)))) |}]
     ;;
   end)
 ;;
