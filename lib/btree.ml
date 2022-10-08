@@ -1,6 +1,6 @@
 open! Core
 
-let rec obj_to_sexp o =
+let rec sexp_of_obj o =
   let tag = Obj.tag o in
   assert (tag <> Obj.unaligned_tag);
   if tag = Obj.int_tag
@@ -14,7 +14,7 @@ let rec obj_to_sexp o =
   else
     Sexp.List
       (if tag < Obj.no_scan_tag
-      then List.init (Obj.size o) ~f:(fun i -> obj_to_sexp (Obj.field o i))
+      then List.init (Obj.size o) ~f:(fun i -> sexp_of_obj (Obj.field o i))
       else List.init (Obj.size o) ~f:(fun i -> [%sexp (Obj.raw_field o i : nativeint)]))
 ;;
 
@@ -38,7 +38,7 @@ module Dim = struct
     | One : int -> elt node t
     | S : int * 'a node t -> 'a node node t
 
-  let max_width = 32
+  let max_width = 4
   let one = One 1
 
   let cols (type a) (t : a t) : int =
@@ -78,7 +78,7 @@ let rec get : 't. 't node -> int -> dim:'t node dim -> elt =
    match dim with
    | One _ ->
      Exn.reraise_uncaught
-       (sprintf !"get t.storage.(%d) = %{Sexp#mach}" i (obj_to_sexp (Obj.repr t.storage)))
+       (sprintf !"get t.storage.(%d) = %{Sexp#mach}" i (sexp_of_obj (Obj.repr t.storage)))
        (fun () -> t.storage.(i))
    | S (_, dim) ->
      let j = ref 0 in
@@ -402,15 +402,20 @@ let rec invariant : 't. 't -> dim:'t dim -> unit =
      if not (Int.between width ~low:min_width ~high:max_width)
      then
        raise_s
-         [%sexp "badly sized level in tree", (obj_to_sexp (Obj.repr t.storage) : Sexp.t)];
+         [%sexp "badly sized level in tree", (sexp_of_obj (Obj.repr t.storage) : Sexp.t)];
      Array.invariant (invariant ~dim) t.storage;
      [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length)
 ;;
 
 let invariant (type t) (t : t) ~(dim : t dim) =
-  match dim with
-  | One _ -> [%test_result: int] t.size ~expect:(Array.length t.storage)
-  | S (_, dim) ->
-    Array.invariant (invariant ~dim) t.storage;
-    [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length)
+  Invariant.invariant
+    [%here]
+    t
+    (fun t -> sexp_of_obj (Obj.repr t))
+    (fun () ->
+      match dim with
+      | One _ -> [%test_result: int] t.size ~expect:(Array.length t.storage)
+      | S (_, dim) ->
+        Array.invariant (invariant ~dim) t.storage;
+        [%test_result: int] t.size ~expect:(Array.sum (module Int) t.storage ~f:length))
 ;;

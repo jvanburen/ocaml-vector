@@ -216,6 +216,8 @@ let rec snoc : 'a. 'a node t -> 'a -> dim:'a node dim -> 'a node t =
 
 let rec append : 'a. 'a node t -> 'a node t -> dim:'a node dim -> 'a node t =
   fun (type a) (t1 : a node t) (t2 : a node t) ~(dim : a node dim) : a node t ->
+   invariant t1 ~dim;
+   invariant t2 ~dim;
    let size = length t1 + length t2 in
    match t1, t2 with
    | Base b1, Base b2 ->
