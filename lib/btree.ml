@@ -360,8 +360,6 @@ let snoc (type t) (t : t node) (x : t) ~(dim : t node dim) =
   append t (create [| x |] ~dim) ~dim
 ;;
 
-let singleton x ~dim = cons x empty ~dim
-
 type _ finger =
   | Top : _ finger
   | Finger :
