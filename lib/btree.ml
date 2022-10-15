@@ -253,27 +253,23 @@ let lsplit2_wide (type a) (w : a wide) ~(dim : a node dim) : a node * a wide =
 
 let rec append : 'a. 'a wide -> 'a wide -> dim:'a node dim -> 'a wide =
   fun (type a) (lhs : a wide) (rhs : a wide) ~(dim : a node dim) : a wide ->
-   match dim with
-   | One _ -> lhs @ rhs
-   | S (_, dim) ->
-     (match width lhs, width rhs with
-      | _, 0 -> lhs
-      | 0, _ -> rhs
-      | lhs_len, rhs_len ->
-        let p =
-          Array.sum (module Int) lhs ~f:(fun t -> t.width)
-          + Array.sum (module Int) rhs ~f:(fun t -> t.width)
-        in
-        let search_error = lhs_len + rhs_len - (((p - 1) / max_width) + 1) in
-        let needs_rebalancing = search_error > max_search_error in
-        if not needs_rebalancing
-        then lhs @ rhs
+   match width lhs, width rhs with
+   | _, 0 -> lhs
+   | 0, _ -> rhs
+   | lhs_len, rhs_len ->
+     let len = lhs_len + rhs_len in
+     let arr = Array.append lhs rhs in
+     (match dim with
+      | One _ -> arr
+      | S (_, dim) ->
+        let p = Array.sum (module Int) arr ~f:(fun t -> t.width) in
+        let search_error = len - (((p - 1) / max_width) + 1) in
+        if search_error <= max_search_error
+        then arr
         else (
           (* TODO: determine the length of [storage] in advance by using the sizes or something
              maybe this could be done by keeping track of the sum of widths of the child nodes
           *)
-          let arr = lhs @ rhs in
-          let len = lhs_len + rhs_len in
           let src_pos = ref 0 in
           while !src_pos < len && arr.(!src_pos).width >= min_width do
             incr src_pos

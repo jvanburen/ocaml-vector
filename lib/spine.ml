@@ -367,13 +367,17 @@ let rec fold_right :
 (* TODO: re-implement this *)
 module Builder = struct
   type nonrec t = Builder of elt btree t [@@unboxed]
+  type one = One
 
   let empty = Builder empty
-  let of_spine t ~dim:_ = Builder t
-  let to_spine (Builder t) ~dim:_ = t
-  let add (Builder t) elt = Builder (snoc t elt ~dim:Btree.Dim.one)
-  let add_arr t other = Array.fold other ~init:t ~f:add
-  let add_spine t other ~dim = fold_left other ~init:t ~f:add ~dim
+  let of_spine t ~dim:One = Builder t
+  let to_spine (Builder t) ~dim:One = t
+  let add (Builder t) elt ~dim:One = Builder (snoc t elt ~dim:Btree.Dim.one)
+  let add_arr t other ~dim:One = Array.fold other ~init:t ~f:(add ~dim:One)
+
+  let add_spine t other ~dim:One =
+    fold_left other ~init:t ~f:(add ~dim:One) ~dim:Btree.Dim.one
+  ;;
 end
 
 module To_array = struct
@@ -384,7 +388,7 @@ module To_array = struct
   ;;
 end
 
-module Builder = struct
+module Builder2 = struct
   type 'a imm_spine = 'a t
 
   type 'a tree =
@@ -400,13 +404,15 @@ module Builder = struct
   type _ spine =
     | Base : 'data tree -> 'data tree spine
     | Spine :
-        { mutable prefix : 'data
+        { mutable size : int
+        ; mutable prefix : 'data
         ; mutable data : 'data tree spine
         ; mutable suffix : 'data
         }
         -> 'data spine
 
   let empty = Obj.magic (Base { size = 0; width = 0; storage = [||] })
+  let empty_tree = Obj.magic { size = 0; width = 0; storage = [||] }
 
   let singleton (type a b) (elt : a) ~(dim : (a tree, b) dim) =
     let size =
@@ -415,6 +421,30 @@ module Builder = struct
       | S _ -> elt.size
     in
     { size; width = 1; storage = Array.create elt ~len:max_width }
+  ;;
+
+  let sub (type a b) (src : a array) ~pos ~len ~(dim : (a, b) dim) =
+    let size =
+      match dim with
+      | One -> len
+      | S _ ->
+        let size = ref 0 in
+        for i = 0 to len - 1 do
+          size := !size + src.(pos + i).size
+        done;
+        !size
+    in
+    let storage =
+      if pos = 0 && len = max_width
+      then src
+      else if len = 0
+      then [||]
+      else (
+        let dst = Array.create src.(0) ~len:max_width in
+        Array.blit ~src ~dst ~src_pos:pos ~dst_pos:1 ~len:(len - 1);
+        dst)
+    in
+    { size; width = len; storage }
   ;;
 
   type 'a t = 'a tree spine
@@ -439,13 +469,54 @@ module Builder = struct
     else None
   ;;
 
+  let try_extend
+    (type a b)
+    (b : a tree)
+    (src : a array)
+    ~pos
+    ~len
+    ~(dim : (a tree, b) dim)
+    =
+    let[@local] extend dst =
+      let remaining_space = b.width - max_width in
+      let added = min len remaining_space in
+      let size =
+        match dim with
+        | One ->
+          Array.blit ~src ~src_pos:pos ~dst:dst.storage ~dst_pos:b.width ~len:added;
+          b.size + added
+        | S _ ->
+          let size = ref b.size in
+          for i = 0 to added - 1 do
+            let elt = src.(pos + i) in
+            size := !size + elt.size;
+            dst.storage.(b.width + i) <- elt
+          done;
+          !size
+      in
+      dst.size <- size;
+      dst.width <- b.width + added;
+      dst, added
+    in
+    if b.width = max_width
+    then b, 0
+    else if Array.length b.storage = max_width
+    then extend b
+    else (
+      let dst = Array.create (Obj.magic 0) ~len:max_width in
+      Array.blito ~src:b.storage ~dst ~src_len:b.width ();
+      extend { b with storage = dst })
+  ;;
+
   let rec add : 'a 'b. 'a t -> 'a -> dim:('a tree, 'b btree) dim -> 'a t =
     fun (type a b) (t : a t) (elt : a) ~(dim : (a tree, b btree) dim) : a t ->
      match t with
      | Base (b : a tree) ->
        (match try_snoc b elt ~dim with
         | Some b -> Base b
-        | None -> Spine { prefix = b; data = empty; suffix = singleton elt ~dim })
+        | None ->
+          let suffix = singleton elt ~dim in
+          Spine { size = b.size + suffix.size; prefix = b; data = empty; suffix })
      | Spine s ->
        let () =
          match try_snoc s.suffix elt ~dim with
@@ -478,98 +549,102 @@ module Builder = struct
     fun (type a b) (t : a t) ~(dim : (a tree, b btree) dim) : b btree imm_spine ->
      match t with
      | Base data -> Base (to_btree data ~dim)
-     | Spine { prefix; data; suffix } ->
-       spine
-         ~data:(to_spine data ~dim:(S dim))
-         ~prefix:(to_btree prefix ~dim)
-         ~suffix:(to_btree suffix ~dim)
+     | Spine { prefix; data; suffix; size } ->
+       Spine
+         { size
+         ; prefix = to_btree prefix ~dim
+         ; data = to_spine data ~dim:(S dim)
+         ; suffix = to_btree suffix ~dim
+         }
   ;;
 
   let rec add_arr :
             'a 'b.
             'a t -> 'a array -> pos:int -> len:int -> dim:('a tree, 'b btree) dim -> 'a t
     =
-    (* TODO: could probably avoid copying some arrays in here in special cases. *)
     fun (type a b) (t : a t) (a : a array) ~pos ~len ~(dim : (a tree, b btree) dim) : a t ->
      if len = 0
      then t
      else (
        match t with
        | Base b ->
-         let added = min len (b.width - b.len) in
-         Array.blit ~src:a ~src_pos:pos ~dst:b.data ~dst_pos:b.len ~len:added;
-         b.len <- b.len + added;
+         let b, added = try_extend b a ~pos ~len ~dim in
          let pos = pos + added
          and len = len - added in
          if len = 0
-         then btree
+         then Base b
          else (
-           let btree =
-             Spine
-               { prefix = b.data
-               ; prefix_len = b.len
-               ; data = Empty
-               ; suffix = Array.create a.(pos) ~len:max_width
-               ; suffix_len = 1
-               }
+           let t =
+             Spine { prefix = b; data = empty; suffix = empty_tree; size = b.size }
            in
-           add_arr btree a ~pos:(pos + 1) ~len:(len - 1))
+           add_arr t a ~pos ~len ~dim)
        | Spine s ->
-         let added = min len (Array.length s.suffix - s.suffix_len) in
-         Array.blit ~src:a ~src_pos:pos ~dst:s.suffix ~dst_pos:s.suffix_len ~len:added;
-         s.suffix_len <- s.suffix_len + added;
+         let suffix, added = try_extend s.suffix a ~pos ~len ~dim in
          let pos = pos + added
          and len = len - added in
+         s.size <- s.size - s.suffix.size + suffix.size;
+         s.suffix <- suffix;
          if len = 0
-         then btree
+         then t
          else (
-           s.data <- add s.data s.suffix;
-           s.suffix_len <- 1;
-           s.suffix <- Array.create a.(pos) ~len:max_width;
-           add_arr btree a ~pos:(pos + 1) ~len:(len - 1)))
+           s.data <- add s.data s.suffix ~dim:(S dim);
+           s.suffix <- empty_tree;
+           add_arr t a ~pos ~len ~dim))
   ;;
 
-  let rec of_spine : 'a. 'a btree spine -> dim:'a btree dim -> 'a btree btree =
-    fun (type a) (btree : a btree spine) ~(dim : a btree dim) : a btree btree ->
-     match btree with
-     | Base b ->
-       (match Array.length b.data with
-        | 0 -> Empty
-        | len -> Base { len; data = extend_nonempty b.data ~len:(max_width - 2) })
-     | Spine { prefix; data; suffix; _ } ->
-       Spine
-         { prefix_len = Array.length prefix
-         ; prefix
-         ; data = of_spine data ~dim:(next dim)
-         ; suffix_len = Array.length suffix
-         ; suffix
-         }
+  external tree_of_btree : 'a btree -> 'a tree = "%opaque"
+
+  (* let rec of_spine : 'a 'b. 'a btree imm_spine -> dim:'a btree dim -> 'a btree btree = *)
+  (*   fun (type a) (btree : a btree imm_spine) ~(dim : a btree dim) : a btree btree -> *)
+  (*    match btree with *)
+  (*    | Base b -> *)
+  (*      (match Array.length b.data with *)
+  (*       | 0 -> Empty *)
+  (*       | len -> Base { len; data = extend_nonempty b.data ~len:(max_width - 2) }) *)
+  (*    | Spine { prefix; data; suffix; _ } -> *)
+  (*      Spine *)
+  (*        { prefix = tree_of_btree prefix *)
+  (*        ; data = of_spine data ~dim:(next dim) *)
+  (*        ; suffix_len = Array.length suffix *)
+  (*        ; suffix = tree_of_btree suffix *)
+  (*        } *)
+  (* ;; *)
+
+  let[@inline] add_arr btree a ~dim : _ t =
+    add_arr btree a ~pos:0 ~len:(Array.length a) ~dim
   ;;
 
-  let[@inline] add_arr btree a = add_arr btree a ~pos:0 ~len:(Array.length a)
+  (* let rec add_btree : 'a 'b. 'a t -> 'b btree -> dim:('a tree, 'b btree) dim -> 'a t = *)
+  (*   fun (type a b) (t : a t) (b : b btree) ~(dim : (a tree, b btree) dim) : a t -> *)
+  (*    match dim with *)
+  (*    | One -> add_arr t b.storage ~dim *)
+  (*    | S dim -> *)
+  (*      (\* match  *\) *)
+  (*      Array.fold b.storage ~init:t ~f:(fun t b -> add_btree t b ~dim) *)
+  (* ;; *)
 
-  let rec add_multi_btree : 'a. t -> 'a btree -> dim:'a btree dim -> t =
-    fun (type a) (t : t) (arr : a btree) ~(dim : a btree dim) : t ->
-     match dim with
-     | S (_, Z) -> add_arr t arr
-     | S (_, (S _ as dim)) ->
-       Array.fold arr ~init:t ~f:(fun btree arr -> add_multi_btree btree arr ~dim)
-  ;;
+  (* let rec add_multi_btree : 'a. 'a tree -> 'a btree -> dim:'a btree dim -> t = *)
+  (*   fun (type a) (t : t) (arr : a btree) ~(dim : a btree dim) : t -> *)
+  (*    match dim with *)
+  (*    | S (_, Z) -> add_arr t arr *)
+  (*    | S (_, (S _ as dim)) -> *)
+  (*      Array.fold arr ~init:t ~f:(fun btree arr -> add_multi_btree btree arr ~dim) *)
+  (* ;; *)
 
-  let rec add_spine : 'a. t -> 'a btree spine -> dim:'a btree dim -> t =
-    fun (type a) (t : t) (spine : a btree spine) ~(dim : a btree dim) : t ->
-     match spine with
-     | Base b -> add_multi_btree t b.data ~dim
-     | Spine s ->
-       let t = add_multi_btree t s.prefix ~dim in
-       let t = add_spine t s.data ~dim:(next dim) in
-       add_multi_btree t s.suffix ~dim
-  ;;
+  (* let rec add_spine : 'a. t -> 'a btree spine -> dim:'a btree dim -> t = *)
+  (*   fun (type a) (t : t) (spine : a btree spine) ~(dim : a btree dim) : t -> *)
+  (*    match spine with *)
+  (*    | Base b -> add_multi_btree t b.data ~dim *)
+  (*    | Spine s -> *)
+  (*      let t = add_multi_btree t s.prefix ~dim in *)
+  (*      let t = add_spine t s.data ~dim:(next dim) in *)
+  (*      add_multi_btree t s.suffix ~dim *)
+  (* ;; *)
 
-  (* TODO: allow specifying pos/len (for better [sub] implementation) *)
-  let add_spine t spine ~dim =
-    match t with
-    | Empty -> of_spine spine ~dim
-    | t -> if phys_equal spine empty then t else add_spine t spine ~dim
-  ;;
+  (* (\* TODO: allow specifying pos/len (for better [sub] implementation) *\) *)
+  (* let add_spine t spine ~dim = *)
+  (*   match t with *)
+  (*   | Empty -> of_spine spine ~dim *)
+  (*   | t -> if phys_equal spine empty then t else add_spine t spine ~dim *)
+  (* ;; *)
 end

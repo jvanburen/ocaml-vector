@@ -90,10 +90,10 @@ let append (type a) (x : a t) (y : a t) : a t =
 let init =
   let rec go n ~f b i =
     if i = n
-    then Spine.Builder.to_spine b ~dim
-    else go n ~f (Spine.Builder.add b (to_any (f i))) (i + 1)
+    then Spine.Builder.to_spine b ~dim:One
+    else go n ~f (Spine.Builder.add b (to_any (f i)) ~dim:One) (i + 1)
   in
-  fun n ~f ->
+  fun n ~f : _ t ->
     if n < 0 then invalid_arg "Vec.init";
     go n ~f Spine.Builder.empty 0
 ;;
@@ -102,11 +102,11 @@ let filter_map (type a b) (t : a t) ~(f : a -> b option) : b t =
   fold t ~init:Spine.Builder.empty ~f:(fun b x ->
     match f (of_any x) with
     | None -> b
-    | Some x -> Spine.Builder.add b (to_any x))
-  |> Spine.Builder.to_spine ~dim
+    | Some x -> Spine.Builder.add b (to_any x) ~dim:One)
+  |> Spine.Builder.to_spine ~dim:One
 ;;
 
-let filter t ~f = filter_map t ~f:(fun x -> Option.some_if (f x) x)
+let filter t ~f : _ t = filter_map t ~f:(fun x -> Option.some_if (f x) x)
 
 let sub (type a) (t : a t) ~pos ~len : a t =
   Ordered_collection_common.check_pos_len_exn ~pos ~len ~total_length:(length t);
@@ -183,15 +183,18 @@ let sexp_of_t (sexp_of_a : 'a -> Sexp.t) (t : 'a t) =
 ;;
 
 let of_list (type a) (l : a list) : a t =
-  List.fold (opaque_magic l : any list) ~init:Spine.Builder.empty ~f:Spine.Builder.add
-  |> Spine.Builder.to_spine ~dim
+  List.fold
+    (opaque_magic l : any list)
+    ~init:Spine.Builder.empty
+    ~f:(Spine.Builder.add ~dim:One)
+  |> Spine.Builder.to_spine ~dim:One
 ;;
 
 let of_sequence s = Sequence.fold s ~init:empty ~f:snoc
 
 let of_array (type a) (a : a array) : a t =
-  Spine.Builder.(add_arr empty) (opaque_magic a : any array)
-  |> Spine.Builder.to_spine ~dim
+  Spine.Builder.(add_arr empty ~dim:One) (opaque_magic a : any array)
+  |> Spine.Builder.to_spine ~dim:One
 ;;
 
 let t_of_sexp (type a) (a_of_sexp : Sexp.t -> a) (sexp : Sexp.t) : a t =
@@ -233,8 +236,9 @@ let weiv (t : 'a t) : ('a t, 'a) View.t =
 ;;
 
 let concat_map t ~f =
-  fold t ~init:Spine.Builder.empty ~f:(fun b x -> Spine.Builder.add_spine b (f x) ~dim)
-  |> Spine.Builder.to_spine ~dim
+  fold t ~init:Spine.Builder.empty ~f:(fun b x ->
+    Spine.Builder.add_spine b (f x) ~dim:One)
+  |> Spine.Builder.to_spine ~dim:One
 ;;
 
 let concat t =
