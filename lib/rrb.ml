@@ -32,8 +32,9 @@ module Size_table = struct
   ;;
 end
 
-type 'a internal = private Internal of 'a
-type leaf = private Leaf
+type z = Z
+type 'n s = S : 'n -> 'n s
+type one = z s
 
 type (_, _, _) node =
   | Leaf :
@@ -41,20 +42,20 @@ type (_, _, _) node =
       ; id : Id.t
       ; child : 'a array (* TODO: uniform array *)
       }
-      -> ('a, 'a, leaf) node
+      -> ('a, 'a, z) node
   | Internal :
       { len : int
       ; id : Id.t
-      ; child : ('a, 'b, 'c) node array
+      ; child : ('a, 'b, 'n) node array
       ; size_table : Size_table.t option
       }
-      -> ('a, ('a, 'b, 'c) node, 'c internal) node
+      -> ('a, ('a, 'b, 'n) node, 'n s) node
 
 type (_, _, _) node_property =
   | Len : (_, _, int) node_property
   | Id : (_, _, Id.t) node_property
   | Child : ('a, _, 'a array) node_property
-  | Size_table : (_, _ internal, Size_table.t option) node_property
+  | Size_table : (_, _ s, Size_table.t option) node_property
 
 let len (type a b c) (node : (a, b, c) node) =
   match node with
@@ -90,39 +91,92 @@ let ( .&() ) (type a b c d) (node : (a, b, c) node) (prop : (b, c, d) node_prope
 
 module Shift : sig
   type (_, _, _) t = private
-    | Leaf : unit -> ('a, 'a, leaf) t
+    | Leaf : unit -> ('a, 'a, z) t
     | Internal :
         { bits : int
         ; child_shift : ('a, 'b, 'c) t
         }
-        -> ('a, ('a, 'b, 'c) node, 'c internal) t
+        -> ('a, ('a, 'b, 'c) node, 'c s) t
 
-  type (_, _, _, _, _) eq =
-    | Lt : ('a, _, _, ('a, 'b, 'c) node, 'c internal) eq
-    | Gt : ('a, ('a, 'b, 'c) node, 'c internal, _, _) eq
-    | Eq : ('a, 'b, 'c) t -> ('a, 'b, 'c, 'b, 'c) eq
+  type (_, _, _, _, _, _, _) max =
+    | Eq : ('a, 'b, 'c, 'b, 'c, 'b, 'c) max
+    | Gt :
+        ('a, 'lb, 'lc, 'rb, 'rc, 'lb, 'lc) max
+        -> ('a, ('a, 'lb, 'lc) node, 'lc s, 'rb, 'rc, ('a, 'lb, 'lc) node, 'lc s) max
+    | Lt :
+        ('a, 'lb, 'lc, 'rb, 'rc, 'rb, 'rc) max
+        -> ('a, 'lb, 'lc, ('a, 'rb, 'rc) node, 'rc s, ('a, 'rb, 'rc) node, 'rc s) max
 
-  val eq : ('a, 'lb, 'lc) t -> ('a, 'rb, 'rc) t -> ('a, 'lb, 'lc, 'rb, 'rc) eq
+  type (_, _, _, _, _) packed_max =
+    | Max : ('a, 'lb, 'lc, 'rb, 'rc, _, _) max -> ('a, 'lb, 'lc, 'rb, 'rc) packed_max
+
+  val cmp
+    : 'a
+    'lb
+    'lc
+    'rb
+    'rc.
+    ('a, 'lb, 'lc) t -> ('a, 'rb, 'rc) t -> ('a, 'lb, 'lc, 'rb, 'rc) packed_max
+
   val bits : _ t -> int
-  val parent : ('a, 'b, 'c) t -> ('a, ('a, 'b, 'c) node, 'c internal) t
-  val child : ('a, ('a, 'b, 'c) node, 'c internal) t -> ('a, 'b, 'c) t
-  val leaf : ('a, 'a, leaf) t
-  val one : ('a, ('a, 'a, leaf) node, leaf internal) t
+  val parent : ('a, 'b, 'c) t -> ('a, ('a, 'b, 'c) node, 'c s) t
+  val child : ('a, ('a, 'b, 'c) node, 'c s) t -> ('a, 'b, 'c) t
+  val leaf : ('a, 'a, z) t
+  val one : ('a, ('a, 'a, z) node, one) t
 
-  type nonrec ('a, 'b, 'c) internal = ('a, ('a, 'b, 'c) node, 'c internal) t
+  type ('a, 'b, 'c) internal = ('a, ('a, 'b, 'c) node, 'c s) t
 end = struct
   type (_, _, _) t =
-    | Leaf : unit -> ('a, 'a, leaf) t
+    | Leaf : unit -> ('a, 'a, z) t
     | Internal :
         { bits : int
         ; child_shift : ('a, 'b, 'c) t
         }
-        -> ('a, ('a, 'b, 'c) node, 'c internal) t
+        -> ('a, ('a, 'b, 'c) node, 'c s) t
 
-  type (_, _, _, _, _) eq =
-    | Lt : ('a, _, _, ('a, 'b, 'c) node, 'c internal) eq
-    | Gt : ('a, ('a, 'b, 'c) node, 'c internal, _, _) eq
-    | Eq : ('a, 'b, 'c) t -> ('a, 'b, 'c, 'b, 'c) eq
+  type (_, _, _, _, _, _, _) max =
+    | Eq : ('a, 'b, 'c, 'b, 'c, 'b, 'c) max
+    | Gt :
+        ('a, 'lb, 'lc, 'rb, 'rc, 'lb, 'lc) max
+        -> ('a, ('a, 'lb, 'lc) node, 'lc s, 'rb, 'rc, ('a, 'lb, 'lc) node, 'lc s) max
+    | Lt :
+        ('a, 'lb, 'lc, 'rb, 'rc, 'rb, 'rc) max
+        -> ('a, 'lb, 'lc, ('a, 'rb, 'rc) node, 'rc s, ('a, 'rb, 'rc) node, 'rc s) max
+
+  type (_, _, _, _, _) packed_max =
+    | Max : ('a, 'lb, 'lc, 'rb, 'rc, _, _) max -> ('a, 'lb, 'lc, 'rb, 'rc) packed_max
+
+  let rec max_succ
+    : type a lb lc rb rc ob oc.
+      (a, lb, lc, rb, rc, ob, oc) max
+      -> (a, (a, lb, lc) node, lc s, (a, rb, rc) node, rc s, (a, ob, oc) node, oc s) max
+    = function
+    | Eq -> Eq
+    | Gt max -> Gt (max_succ max)
+    | Lt max -> Lt (max_succ max)
+  ;;
+
+  let rec gt : type a b c. (a, b, c) t -> (a, b, c, a, z, b, c) max = function
+    | Leaf () -> Eq
+    | Internal { bits = _; child_shift } -> Gt (gt child_shift)
+  ;;
+
+  let rec lt : type a b c. (a, b, c) t -> (a, a, z, b, c, b, c) max = function
+    | Leaf () -> Eq
+    | Internal { bits = _; child_shift } -> Lt (lt child_shift)
+  ;;
+
+  let rec cmp
+    : type a lb lc rb rc. (a, lb, lc) t -> (a, rb, rc) t -> (a, lb, lc, rb, rc) packed_max
+    =
+   fun t1 t2 ->
+    match t1, t2 with
+    | t1, Leaf () -> Max (gt t1)
+    | Leaf (), t2 -> Max (lt t2)
+    | Internal { bits = _; child_shift = t1 }, Internal { bits = _; child_shift = t2 } ->
+      let (Max max) = cmp t1 t2 in
+      Max (max_succ max)
+ ;;
 
   let bits (type a b c) (t : (a, b, c) t) : int =
     match t with
@@ -130,24 +184,15 @@ end = struct
     | Internal { bits; child_shift = _ } -> bits
   ;;
 
-  let parent (type a b c) (t : (a, b, c) t) : (a, (a, b, c) node, c internal) t =
+  let parent (type a b c) (t : (a, b, c) t) : (a, (a, b, c) node, c s) t =
     Internal { bits = rrb_bits + bits t; child_shift = t }
-  ;;
-
-  let eq (type a lb lc rb rc) (left : (a, lb, lc) t) (right : (a, rb, rc) t)
-    : (a, lb, lc, rb, rc) eq
-    =
-    match Ordering.of_int (compare (bits left) (bits right)) with
-    | Equal -> Obj.magic (Eq left)
-    | Greater -> Obj.magic Gt
-    | Less -> Obj.magic Lt
   ;;
 
   let leaf = Leaf ()
   let one = Internal { bits = rrb_bits; child_shift = Leaf () }
   let child (Internal { bits = _; child_shift }) = child_shift
 
-  type nonrec ('a, 'b, 'c) internal = ('a, ('a, 'b, 'c) node, 'c internal) t
+  type nonrec ('a, 'b, 'c) internal = ('a, ('a, 'b, 'c) node, 'c s) t
 end
 
 module Tree_node = struct
@@ -170,12 +215,12 @@ type size_table = Size_table.t =
   }
 
 type ('a, 'b, 'c) shift = ('a, 'b, 'c) Shift.t = private
-  | Leaf : unit -> ('a, 'a, leaf) shift
+  | Leaf : unit -> ('a, 'a, z) shift
   | Internal :
       { bits : int
       ; child_shift : ('a, 'b, 'c) shift
       }
-      -> ('a, ('a, 'b, 'c) node, 'c internal) shift
+      -> ('a, ('a, 'b, 'c) node, 'c s) shift
 
 type 'a tree_node = 'a Tree_node.t =
   | Node : ('a, 'b, 'c) node * ('a, 'b, 'c) Shift.t -> 'a tree_node
@@ -207,7 +252,7 @@ let make_sizes children ~shift:(Internal { bits = _; child_shift }) =
 ;;
 
 module Leaf = struct
-  type 'a t = ('a, 'a, leaf) node
+  type 'a t = ('a, 'a, z) node
 
   let create child ~len : _ node =
     assert (len = Array.length child);
@@ -224,9 +269,9 @@ module Leaf = struct
 end
 
 module Internal = struct
-  type ('a, 'b, 'c) t = ('a, ('a, 'b, 'c) node, 'c internal) node
+  type ('a, 'b, 'c) t = ('a, ('a, 'b, 'c) node, 'c s) node
 
-  let create ?with_sizes child ~len : _ t =
+  let create ~with_sizes child ~len : _ t =
     assert (len = Array.length child);
     Internal
       { len
@@ -248,54 +293,30 @@ module Internal = struct
 
   let merge
     (type a b c)
-    ?with_sizes
+    ~with_sizes
     (Internal { len = left_len; child = left_child; _ } : (a, b, c) t)
-    (center : ((a, b, c) node, (a, b, c) t) Either.t)
+    (Internal { len = center_len; child = center_child; _ } as center : (a, b, c) t)
     (Internal { len = right_len; child = right_child; _ } : (a, b, c) t)
     =
     let left_len = left_len - 1 in
     let right_len = right_len - 1 in
-    let center_len =
-      match center with
-      | First inner ->
-        assert (not (phys_same inner none));
-        1
-      | Second center ->
-        assert (not (phys_equal center none));
-        len center
-    in
+    assert (not (phys_equal center none));
     let len = left_len + center_len + right_len in
-    let child =
-      Array.create
-        (match center with
-         | First x -> x
-         | Second c -> child c 0)
-        ~len
-    in
+    let child = Array.create center_child.(0) ~len in
     Array.blit ~src:left_child ~src_pos:0 ~dst:child ~dst_pos:0 ~len:left_len;
-    let () =
-      match center with
-      | First inner -> child.(left_len) <- inner
-      | Second center ->
-        Array.blit
-          ~src:(children center)
-          ~src_pos:0
-          ~dst:child
-          ~dst_pos:left_len
-          ~len:center_len
-    in
+    Array.blit ~src:center_child ~src_pos:0 ~dst:child ~dst_pos:left_len ~len:center_len;
     Array.blit
       ~src:right_child
       ~src_pos:0
       ~dst:child
       ~dst_pos:(left_len + center_len)
       ~len:right_len;
-    create ?with_sizes child ~len
+    create ~with_sizes child ~len
   ;;
 
   (* TODO: optimize computing with_sizes? *)
-  let sub ?with_sizes t ~pos ~len =
-    create ?with_sizes ~len (Array.sub (children t) ~pos ~len)
+  let sub ~with_sizes t ~pos ~len =
+    create ~with_sizes ~len (Array.sub (children t) ~pos ~len)
   ;;
 end
 
@@ -397,7 +418,7 @@ let execute_concat_plan
               offset := 0)
             else offset := !offset + copied
           done;
-          Internal.create dst ~len:new_size ~with_sizes:child_shift))
+          Internal.create dst ~len:new_size ~with_sizes:(Some child_shift)))
     | Leaf () ->
       let idx = ref 0 in
       let offset = ref 0 in
@@ -431,19 +452,23 @@ let execute_concat_plan
           done;
           Leaf { len = new_size; id = Id.create (); child = dst }))
   in
-  Internal.create children ~len:slen ?with_sizes:(Option.some_if with_sizes shift)
+  Internal.create children ~len:slen ~with_sizes:(Option.some_if with_sizes shift)
 ;;
 
+type (_, _, _, _) is_top =
+  | Top : ('a, 'b, 'c, (('a, 'b, 'c) node, ('a, 'b, 'c) Internal.t) Either.t) is_top
+  | Not_top : ('a, 'b, 'c, ('a, 'b, 'c) Internal.t) is_top
+
 let rebalance
-  (type a b c)
-  (left : (a, b, c) Internal.t)
-  (center : ((a, b, c) node, (a, b, c) Internal.t) Either.t)
-  (right : (a, b, c) Internal.t)
-  ~(shift : (a, b, c) Shift.internal)
-  ~(is_top : bool)
-  : ((a, b, c) Internal.t, (a, (a, b, c) node, c internal) Internal.t) Either.t
+  (type a b c d)
+  (left : (a, (a, b, c) node, c s) node)
+  (center : (a, (a, b, c) node, c s) node)
+  (right : (a, (a, b, c) node, c s) node)
+  ~(shift : (a, (a, b, c) node, c s) Shift.t)
+  ~(is_top : (a, (a, b, c) node, c s, d) is_top)
+  : d
   =
-  let all = Internal.merge left center right in
+  let all = Internal.merge left center right ~with_sizes:None in
   let node_count, top_len = create_concat_plan all in
   let new_all =
     execute_concat_plan
@@ -451,29 +476,39 @@ let rebalance
       ~node_size:node_count
       ~slen:top_len
       ~shift
-      ~with_sizes:(top_len <= rrb_branching && not is_top)
+      ~with_sizes:
+        (top_len <= rrb_branching
+        &&
+        match is_top with
+        | Top -> false
+        | Not_top -> true)
   in
-  if top_len <= rrb_branching
-  then First new_all
-  else (
-    let left = Internal.sub new_all ~pos:0 ~len:rrb_branching ~with_sizes:shift in
+  let split () =
+    let left = Internal.sub new_all ~pos:0 ~len:rrb_branching ~with_sizes:(Some shift) in
     let right =
       Internal.sub
         new_all
         ~pos:rrb_branching
         ~len:(top_len - rrb_branching)
-        ~with_sizes:shift
+        ~with_sizes:(Some shift)
     in
-    Second (Internal.pair left right))
+    Internal.pair left right ~with_sizes:None
+  in
+  match is_top with
+  | Not_top ->
+    if top_len <= rrb_branching
+    then Internal.singleton new_all ~with_sizes:(Some (Shift.parent shift))
+    else split ()
+  | Top -> if top_len <= rrb_branching then First new_all else Second (split ())
 ;;
 
 let rec concat_sub_tree_eq
-  : type a b c.
+  : type a b c d.
     (a, b, c) node
     -> (a, b, c) node
     -> shift:(a, b, c) Shift.t
-    -> is_top:bool
-    -> ((a, b, c) node, (a, b, c) Internal.t) Either.t
+    -> is_top:(a, b, c, d) is_top
+    -> d
   =
  fun left right ~shift ~is_top ->
   match shift with
@@ -483,47 +518,53 @@ let rec concat_sub_tree_eq
         (last_child left)
         (child right 0)
         ~shift:child_shift
-        ~is_top:false
+        ~is_top:Not_top
     in
     rebalance left center right ~shift ~is_top
   | Leaf () ->
-    let node =
-      if is_top && len left + len right <= rrb_branching
-      then Internal.singleton (Leaf.merge left right)
-      else Internal.pair left right
-    in
-    Second node
+    (match is_top with
+     | Not_top -> Internal.pair left right ~with_sizes:(Some (Shift.parent shift))
+     | Top ->
+       if len left + len right <= rrb_branching
+       then First (Leaf.merge left right)
+       else Second (Internal.pair left right ~with_sizes:(Some (Shift.parent shift))))
 ;;
 
 let rec concat_sub_tree
-  : type a. a Tree_node.t -> a Tree_node.t -> is_top:bool -> a Tree_node.t
+  : type a lb lc rb rc b c d.
+    (a, lb, lc) node
+    -> (a, lb, lc) shift
+    -> (a, rb, rc) node
+    -> (a, rb, rc) shift
+    -> (a, lb, lc, rb, rc, b, c) Shift.max
+    -> is_top:(a, b, c, d) is_top
+    -> d
   =
-  fun (type a)
-      (Node (left, left_shift) as left_node : a Tree_node.t)
-      (Node (right, right_shift) as right_node : a Tree_node.t)
-      ~is_top
-    : a Tree_node.t ->
-   match Shift.eq left_shift right_shift with
-   | Eq shift ->
-     (match concat_sub_tree_eq left right ~shift ~is_top with
-      | First node -> Node (node, shift)
-      | Second node -> Node (node, Shift.parent shift))
-   | Gt ->
-     let center =
-       concat_sub_tree
-         (Node (last_child left, Shift.child left_shift))
-         right_node
-         ~is_top:false
-     in
-     rebalance left center Internal.none ~shift:left_shift ~is_top
-   | Lt ->
-     let center =
-       concat_sub_tree
-         left_node
-         (Node (child right 0, Shift.child right_shift))
-         ~is_top:false
-     in
-     rebalance Internal.none center right ~shift:right_shift ~is_top
+ fun left left_shift right right_shift max ~is_top ->
+  match max with
+  | Eq -> concat_sub_tree_eq left right ~shift:left_shift ~is_top
+  | Gt max ->
+    let center : (a, _, _) Internal.t =
+      concat_sub_tree
+        (last_child left)
+        (Shift.child left_shift)
+        right
+        right_shift
+        max
+        ~is_top:Not_top
+    in
+    rebalance left center Internal.none ~shift:left_shift ~is_top
+  | Lt max ->
+    let center =
+      concat_sub_tree
+        left
+        left_shift
+        (child right 0)
+        (Shift.child right_shift)
+        max
+        ~is_top:Not_top
+    in
+    rebalance Internal.none center right ~shift:right_shift ~is_top
 ;;
 
 let concat left right =
