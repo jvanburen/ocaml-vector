@@ -195,20 +195,6 @@ end = struct
   type nonrec ('a, 'b, 'c) internal = ('a, ('a, 'b, 'c) node, 'c s) t
 end
 
-module Tree_node = struct
-  type 'a t = Node : ('a, 'b, 'c) node * ('a, 'b, 'c) Shift.t -> 'a t
-
-  let bits (type a) (Node (_, shift) : a t) = Shift.bits shift
-
-  let is_empty (type a) (Node (node, shift) : a t) =
-    match shift with
-    | Leaf () -> len node = 0
-    | Internal _ ->
-      assert (len node > 0);
-      false
-  ;;
-end
-
 type size_table = Size_table.t =
   { id : Id.t
   ; sizes : int array
@@ -221,9 +207,6 @@ type ('a, 'b, 'c) shift = ('a, 'b, 'c) Shift.t = private
       ; child_shift : ('a, 'b, 'c) shift
       }
       -> ('a, ('a, 'b, 'c) node, 'c s) shift
-
-type 'a tree_node = 'a Tree_node.t =
-  | Node : ('a, 'b, 'c) node * ('a, 'b, 'c) Shift.t -> 'a tree_node
 
 let rec size_sub_trie
   : type a b c. (a, b, c) node -> shift:(a, b, c) Shift.t -> acc:int -> int
@@ -320,19 +303,18 @@ module Internal = struct
   ;;
 end
 
-type 'a t =
+type ('a, 'b, 'c) rrb =
   { cnt : int
-  ; tail_len : int
-  ; tail : 'a Leaf.t
-  ; root : 'a tree_node
+  ; root : ('a, 'b, 'c) node
+  ; shift : ('a, 'b, 'c) Shift.t
   }
+
+type 'a t = Rrb : ('a, _, _) rrb -> 'a t
 
 let tail_id = Id.create ()
 let empty_leaf : _ Leaf.t = Leaf { len = 0; id = tail_id; child = [||] }
-
-let empty =
-  { cnt = 0; root = Node (empty_leaf, Shift.leaf); tail_len = 0; tail = empty_leaf }
-;;
+let empty = Rrb { cnt = 0; root = empty_leaf; shift = Shift.leaf }
+let length (Rrb t) = t.cnt
 
 let append_part_exn left right ~left_len ~len =
   assert (Int.between left_len ~low:0 ~high:(Array.length left));
@@ -567,50 +549,34 @@ let rec concat_sub_tree
     rebalance Internal.none center right ~shift:right_shift ~is_top
 ;;
 
-let concat left right =
-  if left.cnt = 0
+let concat_top
+  : type a lb lc rb rc b c.
+    (a, lb, lc) node
+    -> (a, lb, lc) shift
+    -> (a, rb, rc) node
+    -> (a, rb, rc) shift
+    -> (a, lb, lc, rb, rc, b, c) Shift.max
+    -> cnt:int
+    -> a t
+  =
+ fun left left_shift right right_shift max ~cnt ->
+  let shift : (a, b, c) Shift.t =
+    match max with
+    | Gt _ -> left_shift
+    | Eq -> left_shift
+    | Lt _ -> right_shift
+  in
+  match concat_sub_tree left left_shift right right_shift max ~is_top:Top with
+  | First root -> Rrb { cnt; root; shift }
+  | Second root -> Rrb { cnt; root; shift = Shift.parent shift }
+;;
+
+let concat (Rrb l as left) (Rrb r as right) =
+  if length left = 0
   then right
-  else if right.cnt = 0
+  else if length right = 0
   then left
-  else if not (Tree_node.is_empty right.root)
-  then (
-    let left = push_down_tail left { left with cnt = left.cnt } None in
-    { cnt = left.cnt + right.cnt
-    ; root = concat_sub_tree left.root right.root ~is_top:true
-    ; tail = right.tail
-    ; tail_len = right.tail_len
-    })
   else (
-    let cnt = left.cnt + right.cnt in
-    if left.tail_len = rrb_branching
-    then push_down_tail left { left with cnt } right.tail
-    else if left.tail_len + right.tail_len <= rrb_branching
-    then
-      { left with
-        cnt
-      ; tail_len = left.tail_len + right.tail_len
-      ; tail = leaf_node_merge left.tail right.tail
-      }
-    else (
-      let right_cut = rrb_branching - left.tail_len in
-      let new_tail_len = right.tail_len - right_cut in
-      assert (new_tail_len > 0);
-      let push_down =
-        Leaf.create
-          ~len:rrb_branching
-          (append_part_exn
-             left.tail.child
-             right.tail.child
-             ~left_len:left.tail_len
-             ~len:rrb_branching)
-      in
-      let new_tail =
-        Leaf.create
-          ~len:new_tail_len
-          (Array.sub right.tail.child ~pos:right_cut ~len:new_tail_len)
-      in
-      let new_rrb =
-        { cnt; tail_len = new_tail_len; tail = push_down; root = left.root }
-      in
-      push_down_tail { left with cnt = cnt - new_tail_len } new_rrb new_tail))
+    let (Max max) = Shift.cmp l.shift r.shift in
+    concat_top l.root l.shift r.root r.shift max ~cnt:(l.cnt + r.cnt))
 ;;
