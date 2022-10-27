@@ -311,6 +311,53 @@ type ('a, 'b, 'c) rrb =
 
 type 'a t = Rrb : ('a, _, _) rrb -> 'a t
 
+module Max = struct
+  type t = int
+
+  let zero = 0
+  let ( + ) = Int.max
+end
+
+let rec height : type a b c. (a, b, c) node -> int =
+ fun rrb ->
+  match rrb with
+  | Leaf _ -> 0
+  | Internal i -> 1 + Array.sum (module Max) i.child ~f:height
+;;
+
+let opt_width (type a b c) (node : (a, b, c) Internal.t) =
+  let m = rrb_branching in
+  let s =
+    Array.sum (module Int) (children node) ~f:(fun node -> Array.length (children node))
+  in
+  (s + m - 1) / m
+;;
+
+let width node = Array.length (children node)
+
+let rec is_search_step_relaxed : type a b c. (a, b, c) node -> bool =
+ fun node ->
+  width node <= rrb_branching
+  &&
+  match node with
+  | Leaf _ -> true
+  | Internal n as node ->
+    width node < opt_width node + rrb_extras
+    && Array.for_all n.child ~f:is_search_step_relaxed
+;;
+
+let rec count : type a b c. (a, b, c) node -> f:(a -> bool) -> int =
+ fun node ~f ->
+  match node with
+  | Leaf l -> Array.count l.child ~f
+  | Internal n -> Array.sum (module Int) n.child ~f:(count ~f)
+;;
+
+let invariant (Rrb { cnt; root; shift = _ }) =
+  [%test_result: int] cnt ~expect:(count root ~f:(Fn.const true));
+  assert (is_search_step_relaxed root)
+;;
+
 let tail_id = Id.create ()
 let empty_leaf : _ Leaf.t = Leaf { len = 0; id = tail_id; child = [||] }
 let empty = Rrb { cnt = 0; root = empty_leaf; shift = Shift.leaf }
@@ -579,4 +626,74 @@ let concat (Rrb l as left) (Rrb r as right) =
   else (
     let (Max max) = Shift.cmp l.shift r.shift in
     concat_top l.root l.shift r.root r.shift max ~cnt:(l.cnt + r.cnt))
+;;
+
+let rec get : type a b c. (a, b, c) node -> int -> (a, b, c) Shift.t -> a =
+ fun node i shift ->
+  match node, shift with
+  | Leaf l, Leaf () -> l.child.(i land rrb_mask)
+  | Internal node, Internal { bits; child_shift } ->
+    (match node.size_table with
+     | None -> get node.child.((i lsr bits) land rrb_mask) i child_shift
+     | Some { id = _; sizes } ->
+       let subidx = ref (i lsr bits) in
+       while sizes.(!subidx) <= i do
+         incr subidx
+       done;
+       let child = node.child.(!subidx) in
+       if !subidx = 0
+       then get child i child_shift
+       else get child (i - sizes.(!subidx)) child_shift)
+;;
+
+let get (Rrb { cnt; root; shift }) i =
+  if i < 0
+  then invalid_arg "Rrb.get: negative index"
+  else if i >= cnt
+  then invalid_arg "Rrb.get: out-of-bounds index"
+  else get root i shift
+;;
+
+let rec set
+  : type a b c. (a, b, c) node -> int -> a -> (a, b, c) Shift.t -> (a, b, c) node
+  =
+ fun node i x shift ->
+  match node, shift with
+  | Leaf l, Leaf () ->
+    let i = i land rrb_mask in
+    if phys_equal x l.child.(i)
+    then node
+    else (
+      let child = Array.copy l.child in
+      child.(i land rrb_mask) <- x;
+      Leaf { l with child })
+  | Internal n, Internal { bits; child_shift } ->
+    let child_index, i =
+      match n.size_table with
+      | None -> (i lsr bits) land rrb_mask, i
+      | Some { id = _; sizes } ->
+        let subidx = ref (i lsr bits) in
+        while sizes.(!subidx) <= i do
+          incr subidx
+        done;
+        !subidx, if !subidx = 0 then i else i - sizes.(!subidx)
+    in
+    let child = n.child.(child_index) in
+    let new_child = set child i x child_shift in
+    if phys_equal child new_child
+    then node
+    else (
+      let child = Array.copy n.child in
+      child.(child_index) <- new_child;
+      Internal { n with child })
+;;
+
+let set (Rrb { cnt; root; shift } as t) i x =
+  if i < 0
+  then invalid_arg "Rrb.set: negative index"
+  else if i >= cnt
+  then invalid_arg "Rrb.set: out-of-bounds index"
+  else (
+    let new_root = set root i x shift in
+    if phys_equal root new_root then t else Rrb { cnt; root = new_root; shift })
 ;;
