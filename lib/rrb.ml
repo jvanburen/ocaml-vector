@@ -1,24 +1,24 @@
 open! Core
+open! Expect_test_helpers_core
 
-let rrb_bits = 5
-let rrb_branching = 1 lsl rrb_bits
-let rrb_mask = rrb_branching - 1
-let rrb_invariant = 1
-let rrb_extras = 2
 let max_search_error = 2
-let max_width = 4
-let min_width = max_width - (max_search_error / 2)
+let max_width = 3
+let rrb_branching = max_width
 
-module Id = Unique_id.Int ()
+let%test "max_width" = max_width >= 2
+let%test "max_search_error" = max_search_error < max_width
+
+(* let rrb_bits = 5 *)
+(* let rrb_branching = 1 lsl rrb_bits *)
+(* let rrb_mask = rrb_branching - 1 *)
+let rrb_invariant = 1
+let rrb_extras = max_search_error
 
 module Size_table = struct
-  type t =
-    { id : Id.t
-    ; sizes : int array
-    }
+  type t = { sizes : int array } [@@deriving sexp_of]
 
-  let create len = { id = Id.create (); sizes = Array.create ~len 0 }
-  let clone t = { id = Id.create (); sizes = Array.copy t.sizes }
+  let create len = { sizes = Array.create ~len 0 }
+  let clone t = { sizes = Array.copy t.sizes }
 
   let inc t ~len =
     let dst = create len in
@@ -39,13 +39,11 @@ type one = z s
 type (_, _, _) node =
   | Leaf :
       { len : int
-      ; id : Id.t
       ; child : 'a array (* TODO: uniform array *)
       }
       -> ('a, 'a, z) node
   | Internal :
       { len : int
-      ; id : Id.t
       ; child : ('a, 'b, 'n) node array
       ; size_table : Size_table.t option
       }
@@ -53,7 +51,6 @@ type (_, _, _) node =
 
 type (_, _, _) node_property =
   | Len : (_, _, int) node_property
-  | Id : (_, _, Id.t) node_property
   | Child : ('a, _, 'a array) node_property
   | Size_table : (_, _ s, Size_table.t option) node_property
 
@@ -61,12 +58,6 @@ let len (type a b c) (node : (a, b, c) node) =
   match node with
   | Leaf leaf -> leaf.len
   | Internal node -> node.len
-;;
-
-let id (type a b c) (node : (a, b, c) node) =
-  match node with
-  | Leaf leaf -> leaf.id
-  | Internal node -> node.id
 ;;
 
 let children (type a b c) (node : (a, b, c) node) : b array =
@@ -82,7 +73,6 @@ let size_table (Internal node) = node.size_table
 let ( .&() ) (type a b c d) (node : (a, b, c) node) (prop : (b, c, d) node_property) : d =
   match prop with
   | Len -> len node
-  | Id -> id node
   | Child -> children node
   | Size_table ->
     (match node with
@@ -90,13 +80,14 @@ let ( .&() ) (type a b c d) (node : (a, b, c) node) (prop : (b, c, d) node_prope
 ;;
 
 module Shift : sig
-  type (_, _, _) t = private
-    | Leaf : unit -> ('a, 'a, z) t
-    | Internal :
-        { bits : int
-        ; child_shift : ('a, 'b, 'c) t
-        }
-        -> ('a, ('a, 'b, 'c) node, 'c s) t
+  type (_, _, _) level =
+    | Leaf : ('a, 'a, z) level
+    | Internal : ('a, ('a, 'b, 'c) node, 'c s) level
+
+  (* TODO: make this opaque and just expose a [level] GADT that says leaf or internal *)
+  type (_, _, _) t
+
+  val level : ('a, 'b, 'c) t -> ('a, 'b, 'c) level
 
   type (_, _, _, _, _, _, _) max =
     | Eq : ('a, 'b, 'c, 'b, 'c, 'b, 'c) max
@@ -125,7 +116,13 @@ module Shift : sig
   val one : ('a, ('a, 'a, z) node, one) t
 
   type ('a, 'b, 'c) internal = ('a, ('a, 'b, 'c) node, 'c s) t
+
+  val expected_child_index : _ internal -> int -> int
 end = struct
+  type (_, _, _) level =
+    | Leaf : ('a, 'a, z) level
+    | Internal : ('a, ('a, 'b, 'c) node, 'c s) level
+
   type (_, _, _) t =
     | Leaf : unit -> ('a, 'a, z) t
     | Internal :
@@ -133,6 +130,12 @@ end = struct
         ; child_shift : ('a, 'b, 'c) t
         }
         -> ('a, ('a, 'b, 'c) node, 'c s) t
+
+  let level (type a b c) (t : (a, b, c) t) : (a, b, c) level =
+    match t with
+    | Leaf () -> Leaf
+    | Internal _ -> Internal
+  ;;
 
   type (_, _, _, _, _, _, _) max =
     | Eq : ('a, 'b, 'c, 'b, 'c, 'b, 'c) max
@@ -180,55 +183,57 @@ end = struct
 
   let bits (type a b c) (t : (a, b, c) t) : int =
     match t with
-    | Leaf () -> 0
+    | Leaf () -> 1
     | Internal { bits; child_shift = _ } -> bits
   ;;
 
   let parent (type a b c) (t : (a, b, c) t) : (a, (a, b, c) node, c s) t =
-    Internal { bits = rrb_bits + bits t; child_shift = t }
+    Internal { bits = rrb_branching * bits t; child_shift = t }
   ;;
 
   let leaf = Leaf ()
-  let one = Internal { bits = rrb_bits; child_shift = Leaf () }
+  let one = Internal { bits = rrb_branching; child_shift = Leaf () }
   let child (Internal { bits = _; child_shift }) = child_shift
+
+  let expected_child_index (Internal { bits; child_shift = _ }) i =
+    assert (bits > 0);
+    i / bits mod rrb_branching
+  ;;
 
   type nonrec ('a, 'b, 'c) internal = ('a, ('a, 'b, 'c) node, 'c s) t
 end
 
-type size_table = Size_table.t =
-  { id : Id.t
-  ; sizes : int array
-  }
+type size_table = Size_table.t = { sizes : int array }
 
-type ('a, 'b, 'c) shift = ('a, 'b, 'c) Shift.t = private
-  | Leaf : unit -> ('a, 'a, z) shift
-  | Internal :
-      { bits : int
-      ; child_shift : ('a, 'b, 'c) shift
-      }
-      -> ('a, ('a, 'b, 'c) node, 'c s) shift
+type ('a, 'b, 'c) level = ('a, 'b, 'c) Shift.level =
+  | Leaf : ('a, 'a, z) level
+  | Internal : ('a, ('a, 'b, 'c) node, 'c s) level
 
 let rec size_sub_trie
   : type a b c. (a, b, c) node -> shift:(a, b, c) Shift.t -> acc:int -> int
   =
  fun node ~shift ~acc ->
-  match shift, node with
-  | Leaf (), Leaf { len; _ } -> len
-  | Internal { bits; child_shift }, Internal { size_table; len; child; _ } ->
-    (match size_table with
+  let len = len node in
+  match Shift.level shift with
+  | Leaf -> len
+  | Internal ->
+    (match size_table node with
      | Some table -> table.sizes.(len - 1)
      | None ->
-       size_sub_trie child.(len - 1) ~shift:child_shift ~acc:(acc + ((len - 1) lsl bits)))
+       size_sub_trie
+         (child node (len - 1))
+         ~shift:(Shift.child shift)
+         ~acc:(acc + (rrb_branching * (len - 1))))
 ;;
 
 let size_sub_trie node ~shift = size_sub_trie node ~shift ~acc:0
 
-let make_sizes children ~shift:(Internal { bits = _; child_shift }) =
+let make_sizes children ~shift =
   let sum = ref 0 in
   let len = Array.length children in
   let table = Size_table.create len in
   for i = 0 to len - 1 do
-    sum := !sum + size_sub_trie children.(i) ~shift:child_shift;
+    sum := !sum + size_sub_trie children.(i) ~shift:(Shift.child shift);
     table.sizes.(i) <- !sum
   done;
   table
@@ -239,7 +244,7 @@ module Leaf = struct
 
   let create child ~len : _ node =
     assert (len = Array.length child);
-    Leaf { len; id = Id.create (); child }
+    Leaf { len; child }
   ;;
 
   let merge
@@ -254,11 +259,18 @@ end
 module Internal = struct
   type ('a, 'b, 'c) t = ('a, ('a, 'b, 'c) node, 'c s) node
 
-  let create ~with_sizes child ~len : _ t =
-    assert (len = Array.length child);
+  let create ~with_sizes child ~len:n : _ t =
+    if true
+    then (
+      assert (Int.between n ~low:1 ~high:rrb_branching);
+      assert (n = Array.length child);
+      let needs_sizes =
+        Array.existsi child ~f:(fun i c ->
+          not (i = Array.length child - 1 || len c = rrb_branching))
+      in
+      assert (needs_sizes ==> Option.is_some with_sizes));
     Internal
-      { len
-      ; id = Id.create ()
+      { len = n
       ; child
       ; size_table =
           (match with_sizes with
@@ -267,16 +279,14 @@ module Internal = struct
       }
   ;;
 
-  let singleton child = create [| child |] ~len:1
-  let pair left right = create [| left; right |] ~len:2
-  let empty_id = Id.create ()
+  let singleton child = create [| child |] ~len:1 ~with_sizes:None
+  let pair left right ~with_sizes = create [| left; right |] ~len:2 ~with_sizes
 
   (** sentinel for [merge] *)
-  let none : _ node = Internal { len = 1; id = empty_id; child = [||]; size_table = None }
+  let none : _ node = Internal { len = 1; child = [||]; size_table = None }
 
   let merge
     (type a b c)
-    ~with_sizes
     (Internal { len = left_len; child = left_child; _ } : (a, b, c) t)
     (Internal { len = center_len; child = center_child; _ } as center : (a, b, c) t)
     (Internal { len = right_len; child = right_child; _ } : (a, b, c) t)
@@ -294,12 +304,7 @@ module Internal = struct
       ~dst:child
       ~dst_pos:(left_len + center_len)
       ~len:right_len;
-    create ~with_sizes child ~len
-  ;;
-
-  (* TODO: optimize computing with_sizes? *)
-  let sub ~with_sizes t ~pos ~len =
-    create ~with_sizes ~len (Array.sub (children t) ~pos ~len)
+    child
   ;;
 end
 
@@ -311,55 +316,73 @@ type ('a, 'b, 'c) rrb =
 
 type 'a t = Rrb : ('a, _, _) rrb -> 'a t
 
-module Max = struct
-  type t = int
+module Debug = struct
+  type nonrec 'a t = 'a t
 
-  let zero = 0
-  let ( + ) = Int.max
+  let rec sexp_of_node : type a b c. (a -> Sexp.t) -> (a, b, c) node -> Sexp.t =
+   fun sexp_of_a node ->
+    match node with
+    | Leaf { len; child } -> [%sexp Leaf { len : int; child : a array }]
+    | Internal { len; child; size_table } ->
+      let child = Array.map child ~f:(sexp_of_node sexp_of_a) in
+      [%sexp
+        Internal { len : int; size_table : Size_table.t option; child : Sexp.t array }]
+ ;;
+
+  let sexp_of_t sexp_of_a (Rrb { cnt; root; shift = _ }) =
+    [%sexp { cnt : int; root = (sexp_of_node sexp_of_a root : Sexp.t) }]
+  ;;
+
+  module Max = struct
+    type t = int
+
+    let zero = 0
+    let ( + ) = Int.max
+  end
+
+  let rec height : type a b c. (a, b, c) node -> int =
+   fun rrb ->
+    match rrb with
+    | Leaf _ -> 0
+    | Internal i -> 1 + Array.sum (module Max) i.child ~f:height
+ ;;
+
+  let opt_width (type a b c) (node : (a, b, c) Internal.t) =
+    let m = rrb_branching in
+    let s =
+      Array.sum (module Int) (children node) ~f:(fun node -> Array.length (children node))
+    in
+    (s + m - 1) / m
+  ;;
+
+  let width node = Array.length (children node)
+
+  let rec is_search_step_relaxed : type a b c. (a, b, c) node -> bool =
+   fun node ->
+    width node <= rrb_branching
+    &&
+    match node with
+    | Leaf _ -> true
+    | Internal n as node ->
+      width node < opt_width node + rrb_extras
+      && Array.for_all n.child ~f:is_search_step_relaxed
+ ;;
+
+  let rec count : type a b c. (a, b, c) node -> f:(a -> bool) -> int =
+   fun node ~f ->
+    match node with
+    | Leaf l -> Array.count l.child ~f
+    | Internal n -> Array.sum (module Int) n.child ~f:(count ~f)
+ ;;
+
+  let invariant (Rrb { cnt; root; shift = _ } as t) =
+    Invariant.invariant [%here] t [%sexp_of: _ t] (fun () ->
+      [%test_result: int] cnt ~expect:(count root ~f:(Fn.const true));
+      assert (is_search_step_relaxed root))
+  ;;
 end
 
-let rec height : type a b c. (a, b, c) node -> int =
- fun rrb ->
-  match rrb with
-  | Leaf _ -> 0
-  | Internal i -> 1 + Array.sum (module Max) i.child ~f:height
-;;
-
-let opt_width (type a b c) (node : (a, b, c) Internal.t) =
-  let m = rrb_branching in
-  let s =
-    Array.sum (module Int) (children node) ~f:(fun node -> Array.length (children node))
-  in
-  (s + m - 1) / m
-;;
-
-let width node = Array.length (children node)
-
-let rec is_search_step_relaxed : type a b c. (a, b, c) node -> bool =
- fun node ->
-  width node <= rrb_branching
-  &&
-  match node with
-  | Leaf _ -> true
-  | Internal n as node ->
-    width node < opt_width node + rrb_extras
-    && Array.for_all n.child ~f:is_search_step_relaxed
-;;
-
-let rec count : type a b c. (a, b, c) node -> f:(a -> bool) -> int =
- fun node ~f ->
-  match node with
-  | Leaf l -> Array.count l.child ~f
-  | Internal n -> Array.sum (module Int) n.child ~f:(count ~f)
-;;
-
-let invariant (Rrb { cnt; root; shift = _ }) =
-  [%test_result: int] cnt ~expect:(count root ~f:(Fn.const true));
-  assert (is_search_step_relaxed root)
-;;
-
-let tail_id = Id.create ()
-let empty_leaf : _ Leaf.t = Leaf { len = 0; id = tail_id; child = [||] }
+let empty_leaf : _ Leaf.t = Leaf { len = 0; child = [||] }
 let empty = Rrb { cnt = 0; root = empty_leaf; shift = Shift.leaf }
 let length (Rrb t) = t.cnt
 
@@ -374,11 +397,11 @@ let append_part_exn left right ~left_len ~len =
   dst
 ;;
 
-let create_concat_plan (Internal _ as all : _ node) =
-  let node_count = Array.map (children all) ~f:len in
+let create_concat_plan (all : _ node array) =
+  let node_count = Array.map all ~f:len in
   let total_nodes = Array.sum (module Int) node_count ~f:Fn.id in
   let optimal_slots = ((total_nodes - 1) / rrb_branching) + 1 in
-  let shuffled_len = ref (len all) in
+  let shuffled_len = ref (Array.length all) in
   let i = ref 0 in
   while optimal_slots + rrb_extras < !shuffled_len do
     while node_count.(!i) > rrb_branching - rrb_invariant do
@@ -393,34 +416,36 @@ let create_concat_plan (Internal _ as all : _ node) =
       remaining_nodes := !remaining_nodes + node_count.(!i + 1) - min_size;
       incr i
     done;
-    Array.blit
-      ~src:node_count
-      ~src_pos:(!i + 1)
-      ~dst:node_count
-      ~dst_pos:!i
-      ~len:(!shuffled_len - 1);
+    for j = !i to !shuffled_len - 2 do
+      node_count.(j) <- node_count.(j + 1)
+    done;
+    (*     Array.blit *)
+    (* ~src:node_count *)
+    (* ~src_pos:(!i + 1) *)
+    (* ~dst:node_count *)
+    (* ~dst_pos:!i *)
+    (* ~len:(!shuffled_len - 1); *)
     decr shuffled_len;
     decr i
   done;
-  node_count, !shuffled_len
+  Array.subo node_count ~len:!shuffled_len
 ;;
 
 let execute_concat_plan
   (type a b c)
-  (all : (a, b, c) Internal.t)
+  (all : (a, b, c) node array)
   ~node_size
-  ~slen
   ~(shift : (a, b, c) Shift.internal)
-  ~with_sizes
-  : (a, b, c) Internal.t
+  : (a, b, c) node array
   =
   let children : (a, b, c) node array =
-    match Shift.child shift with
-    | Internal _ as child_shift ->
+    let child_shift = Shift.child shift in
+    match Shift.level child_shift with
+    | Internal ->
       let idx = ref 0 in
       let offset = ref 0 in
       Array.map node_size ~f:(fun new_size ->
-        let old = child all !idx in
+        let old = all.(!idx) in
         if !offset = 0 && new_size = len old
         then (
           incr idx;
@@ -429,8 +454,8 @@ let execute_concat_plan
           let dst = Array.create (child old 0) ~len:new_size in
           let cur_size = ref 0 in
           while !cur_size < new_size do
-            assert (!idx < len all);
-            let old = child all !idx in
+            assert (!idx < Array.length all);
+            let old = all.(!idx) in
             let remaining_in_dst = new_size - !cur_size in
             let remaining_in_old = len old - !offset in
             let copied = Int.min remaining_in_dst remaining_in_old in
@@ -448,11 +473,11 @@ let execute_concat_plan
             else offset := !offset + copied
           done;
           Internal.create dst ~len:new_size ~with_sizes:(Some child_shift)))
-    | Leaf () ->
+    | Leaf ->
       let idx = ref 0 in
       let offset = ref 0 in
       Array.map node_size ~f:(fun new_size ->
-        let old : b Leaf.t = child all !idx in
+        let old : b Leaf.t = all.(!idx) in
         if !offset = 0 && new_size = len old
         then (
           incr idx;
@@ -461,8 +486,8 @@ let execute_concat_plan
           let dst = Array.create (child old 0) ~len:new_size in
           let cur_size = ref 0 in
           while !cur_size < new_size do
-            assert (!idx < len all);
-            let old = child all !idx in
+            assert (!idx < Array.length all);
+            let old = all.(!idx) in
             let remaining_in_dst = new_size - !cur_size in
             let remaining_in_old = len old - !offset in
             let copied = Int.min remaining_in_dst remaining_in_old in
@@ -479,10 +504,12 @@ let execute_concat_plan
               offset := 0)
             else offset := !offset + copied
           done;
-          Leaf { len = new_size; id = Id.create (); child = dst }))
+          Leaf.create dst ~len:new_size))
   in
-  Internal.create children ~len:slen ~with_sizes:(Option.some_if with_sizes shift)
+  children
 ;;
+
+(* Internal.create  ~len:slen ~with_sizes:(Option.some_if with_sizes shift) *)
 
 type (_, _, _, _) is_top =
   | Top : ('a, 'b, 'c, (('a, 'b, 'c) node, ('a, 'b, 'c) Internal.t) Either.t) is_top
@@ -497,38 +524,35 @@ let rebalance
   ~(is_top : (a, (a, b, c) node, c s, d) is_top)
   : d
   =
-  let all = Internal.merge left center right ~with_sizes:None in
-  let node_count, top_len = create_concat_plan all in
-  let new_all =
-    execute_concat_plan
-      all
-      ~node_size:node_count
-      ~slen:top_len
-      ~shift
-      ~with_sizes:
-        (top_len <= rrb_branching
-        &&
-        match is_top with
-        | Top -> false
-        | Not_top -> true)
-  in
+  let all = Internal.merge left center right in
+  let node_count = create_concat_plan all in
+  let new_all = execute_concat_plan all ~node_size:node_count ~shift in
   let split () =
-    let left = Internal.sub new_all ~pos:0 ~len:rrb_branching ~with_sizes:(Some shift) in
-    let right =
-      Internal.sub
-        new_all
-        ~pos:rrb_branching
-        ~len:(top_len - rrb_branching)
+    (* TODO: optimize computing with_sizes? *)
+    let left =
+      Internal.create
+        (Array.subo new_all ~len:rrb_branching)
+        ~len:rrb_branching
         ~with_sizes:(Some shift)
     in
-    Internal.pair left right ~with_sizes:None
+    let right =
+      Internal.create
+        (Array.subo new_all ~pos:rrb_branching)
+        ~len:(Array.length new_all - rrb_branching)
+        ~with_sizes:(Some shift)
+    in
+    Internal.pair left right ~with_sizes:(Some (Shift.parent shift))
+  in
+  let keep () =
+    Internal.create new_all ~len:(Array.length new_all) ~with_sizes:(Some shift)
   in
   match is_top with
   | Not_top ->
-    if top_len <= rrb_branching
-    then Internal.singleton new_all ~with_sizes:(Some (Shift.parent shift))
+    if Array.length new_all <= rrb_branching
+    then Internal.singleton (keep ())
     else split ()
-  | Top -> if top_len <= rrb_branching then First new_all else Second (split ())
+  | Top ->
+    if Array.length new_all <= rrb_branching then First (keep ()) else Second (split ())
 ;;
 
 let rec concat_sub_tree_eq
@@ -540,17 +564,17 @@ let rec concat_sub_tree_eq
     -> d
   =
  fun left right ~shift ~is_top ->
-  match shift with
-  | Internal { bits = _; child_shift } as shift ->
+  match Shift.level shift with
+  | Internal ->
     let center =
       concat_sub_tree_eq
         (last_child left)
         (child right 0)
-        ~shift:child_shift
+        ~shift:(Shift.child shift)
         ~is_top:Not_top
     in
     rebalance left center right ~shift ~is_top
-  | Leaf () ->
+  | Leaf ->
     (match is_top with
      | Not_top -> Internal.pair left right ~with_sizes:(Some (Shift.parent shift))
      | Top ->
@@ -562,9 +586,9 @@ let rec concat_sub_tree_eq
 let rec concat_sub_tree
   : type a lb lc rb rc b c d.
     (a, lb, lc) node
-    -> (a, lb, lc) shift
+    -> (a, lb, lc) Shift.t
     -> (a, rb, rc) node
-    -> (a, rb, rc) shift
+    -> (a, rb, rc) Shift.t
     -> (a, lb, lc, rb, rc, b, c) Shift.max
     -> is_top:(a, b, c, d) is_top
     -> d
@@ -599,9 +623,9 @@ let rec concat_sub_tree
 let concat_top
   : type a lb lc rb rc b c.
     (a, lb, lc) node
-    -> (a, lb, lc) shift
+    -> (a, lb, lc) Shift.t
     -> (a, rb, rc) node
-    -> (a, rb, rc) shift
+    -> (a, rb, rc) Shift.t
     -> (a, lb, lc, rb, rc, b, c) Shift.max
     -> cnt:int
     -> a t
@@ -630,23 +654,32 @@ let concat (Rrb l as left) (Rrb r as right) =
 
 let rec get : type a b c. (a, b, c) node -> int -> (a, b, c) Shift.t -> a =
  fun node i shift ->
-  match node, shift with
-  | Leaf l, Leaf () -> l.child.(i land rrb_mask)
-  | Internal node, Internal { bits; child_shift } ->
-    (match node.size_table with
-     | None -> get node.child.((i lsr bits) land rrb_mask) i child_shift
-     | Some { id = _; sizes } ->
-       let subidx = ref (i lsr bits) in
-       while sizes.(!subidx) <= i do
-         incr subidx
-       done;
-       let child = node.child.(!subidx) in
-       if !subidx = 0
-       then get child i child_shift
-       else get child (i - sizes.(!subidx)) child_shift)
+  (* print_s [%sexp Get { i : int; node : _ Debug.node }]; *)
+  try
+    match Shift.level shift with
+    | Leaf ->
+      let (Leaf l) = node in
+      (* print_s [%sexp Get_leaf, (i mod rrb_branching : int)]; *)
+      (try l.child.(i mod rrb_branching) with
+       | exn -> raise_s [%sexp (exn : Exn.t), ~~(i : int), (l.len : int)])
+    | Internal ->
+      let (Internal node) = node in
+      let subidx = ref (Shift.expected_child_index shift i) in
+      (match node.size_table with
+       | None -> get node.child.(!subidx) i (Shift.child shift)
+       | Some { sizes } ->
+         while sizes.(!subidx) <= i do
+           incr subidx
+         done;
+         let i = if !subidx = 0 then i else i - sizes.(!subidx - 1) in
+         get node.child.(!subidx) i (Shift.child shift))
+  with
+  | exn -> raise_s [%sexp { node : _ Debug.node; i : int; exn : Exn.t }]
 ;;
 
 let get (Rrb { cnt; root; shift }) i =
+  print_endline "";
+  (* print_s [%sexp GET { i : int; t : _ Debug.t }]; *)
   if i < 0
   then invalid_arg "Rrb.get: negative index"
   else if i >= cnt
@@ -658,28 +691,30 @@ let rec set
   : type a b c. (a, b, c) node -> int -> a -> (a, b, c) Shift.t -> (a, b, c) node
   =
  fun node i x shift ->
-  match node, shift with
-  | Leaf l, Leaf () ->
-    let i = i land rrb_mask in
+  match Shift.level shift with
+  | Leaf ->
+    let (Leaf l) = node in
+    let i = i mod rrb_branching in
     if phys_equal x l.child.(i)
     then node
     else (
       let child = Array.copy l.child in
-      child.(i land rrb_mask) <- x;
+      child.(i) <- x;
       Leaf { l with child })
-  | Internal n, Internal { bits; child_shift } ->
+  | Internal ->
+    let (Internal n) = node in
+    let subidx = ref (Shift.expected_child_index shift i) in
     let child_index, i =
-      match n.size_table with
-      | None -> (i lsr bits) land rrb_mask, i
-      | Some { id = _; sizes } ->
-        let subidx = ref (i lsr bits) in
+      match size_table node with
+      | None -> !subidx, i
+      | Some { sizes } ->
         while sizes.(!subidx) <= i do
           incr subidx
         done;
-        !subidx, if !subidx = 0 then i else i - sizes.(!subidx)
+        !subidx, if !subidx = 0 then i else i - sizes.(!subidx - 1)
     in
     let child = n.child.(child_index) in
-    let new_child = set child i x child_shift in
+    let new_child = set child i x (Shift.child shift) in
     if phys_equal child new_child
     then node
     else (
@@ -696,4 +731,55 @@ let set (Rrb { cnt; root; shift } as t) i x =
   else (
     let new_root = set root i x shift in
     if phys_equal root new_root then t else Rrb { cnt; root = new_root; shift })
+;;
+
+let singleton x = Rrb { cnt = 1; root = Leaf.create [| x |] ~len:1; shift = Shift.leaf }
+let cons x t = concat (singleton x) t
+let snoc t x = concat t (singleton x)
+let of_list l = List.fold l ~init:empty ~f:snoc
+let to_list t = List.init (length t) ~f:(get t)
+
+let init n ~f =
+  let rec go i t = if i >= n then t else go (i + 1) (snoc t (f i)) in
+  go 0 empty
+;;
+
+include
+  Quickcheckable.Of_quickcheckable1
+    (List)
+    (struct
+      type nonrec 'a t = 'a t
+
+      let to_quickcheckable = to_list
+      let of_quickcheckable = of_list
+    end)
+
+let%test_module _ =
+  (module struct
+    let quickcheck_generator_int = Int.gen_incl 0 9
+
+    (* TODO: balancing invariant sometimes fails, is it correct? *)
+
+    let%test_unit "list conversions" =
+      for i = 0 to rrb_branching * (rrb_branching + 1) do
+        let l = List.init i ~f:succ in
+        let t = of_list l in
+        (* Debug.invariant t; *)
+        try [%test_result: int list] (to_list t) ~expect:l with
+        | exn -> raise_s [%sexp (t : int Debug.t), (exn : Exn.t)]
+      done
+    ;;
+
+    let%test_unit "list conversions" =
+      Quickcheck.test
+        ~examples:(List.init 10 ~f:(List.init ~f:succ))
+        [%quickcheck.generator: int list]
+        ~sexp_of:[%sexp_of: int list]
+        ~f:(fun l ->
+          let t = of_list l in
+          (* Debug.invariant t; *)
+          try [%test_result: int list] (to_list t) ~expect:l with
+          | exn -> raise_s [%sexp (t : int Debug.t), (exn : Exn.t)])
+    ;;
+  end)
 ;;
