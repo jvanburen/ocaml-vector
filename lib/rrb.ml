@@ -300,7 +300,7 @@ module Internal = struct
     let child = Array.create center_child.(0) ~len in
     Array.blit ~src:left_child ~src_pos:0 ~dst:child ~dst_pos:0 ~len:left_len;
     Array.blit ~src:center_child ~src_pos:0 ~dst:child ~dst_pos:left_len ~len:center_len;
-    if not (phys_equal right none)
+    if right_len > 0
     then
       Array.blit
         ~src:right_child
@@ -439,9 +439,7 @@ let create_concat_plan (all : _ node array) =
     decr shuffled_len;
     decr i
   done;
-  let out = Array.subo node_count ~len:!shuffled_len in
-  [%test_result: int] (Array.sum (module Int) out ~f:Fn.id) ~expect:total_nodes;
-  out
+  Array.subo node_count ~len:!shuffled_len
 ;;
 
 let execute_concat_plan
@@ -451,58 +449,39 @@ let execute_concat_plan
   ~(shift : (a, b, c) Shift.internal)
   : (a, b, c) node array
   =
-  let children : (a, b, c) node array =
-    let child_shift = Shift.child shift in
-    let idx = ref 0 in
-    let offset = ref 0 in
-    Array.map node_size ~f:(fun new_size ->
-      let old = all.(!idx) in
-      if !offset = 0 && new_size = len old
-      then (
-        incr idx;
-        old)
-      else (
-        let dst = Array.create (child old 0) ~len:new_size in
-        let cur_size = ref 0 in
-        while !cur_size < new_size do
-          let old = all.(!idx) in
-          let remaining_in_dst = new_size - !cur_size in
-          let remaining_in_old = len old - !offset in
-          let copied = Int.min remaining_in_dst remaining_in_old in
-          Array.blit
-            ~src:(children old)
-            ~src_pos:!offset
-            ~dst
-            ~dst_pos:!cur_size
-            ~len:copied;
-          cur_size := !cur_size + copied;
-          if remaining_in_old < remaining_in_dst
-          then (
-            incr idx;
-            offset := 0)
-          else offset := !offset + copied
-        done;
-        match Shift.level child_shift with
-        | Internal -> Internal.create dst ~len:new_size ~with_sizes:(Some child_shift)
-        | Leaf -> Leaf.create dst ~len:new_size))
-  in
-  let () =
-    let actual = Array.fold_right children ~init:[] ~f:node_to_list in
-    let expect = Array.fold_right all ~init:[] ~f:node_to_list in
-    try [%test_result: int list] (Obj.magic actual) ~expect:(Obj.magic expect) with
-    | exn ->
-      let input = Array.map all ~f:(fun n : int list -> Obj.magic node_to_list n []) in
-      let output =
-        Array.map children ~f:(fun n : int list -> Obj.magic (node_to_list n []))
-      in
-      raise_s
-        [%message
-          (input : int list array)
-            (output : int list array)
-            (node_size : int array)
-            (exn : Exn.t)]
-  in
-  children
+  let child_shift = Shift.child shift in
+  let idx = ref 0 in
+  let offset = ref 0 in
+  Array.map node_size ~f:(fun new_size ->
+    let old = all.(!idx) in
+    if !offset = 0 && new_size = len old
+    then (
+      incr idx;
+      old)
+    else (
+      let dst = Array.create (child old 0) ~len:new_size in
+      let cur_size = ref 0 in
+      while !cur_size < new_size do
+        let old = all.(!idx) in
+        let remaining_in_dst = new_size - !cur_size in
+        let remaining_in_old = len old - !offset in
+        let copied = Int.min remaining_in_dst remaining_in_old in
+        Array.blit
+          ~src:(children old)
+          ~src_pos:!offset
+          ~dst
+          ~dst_pos:!cur_size
+          ~len:copied;
+        cur_size := !cur_size + copied;
+        if remaining_in_old < remaining_in_dst
+        then (
+          incr idx;
+          offset := 0)
+        else offset := !offset + copied
+      done;
+      match Shift.level child_shift with
+      | Internal -> Internal.create dst ~len:new_size ~with_sizes:(Some child_shift)
+      | Leaf -> Leaf.create dst ~len:new_size))
 ;;
 
 type (_, _, _, _) is_top =
