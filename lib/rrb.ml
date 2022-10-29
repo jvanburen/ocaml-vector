@@ -289,8 +289,10 @@ module Internal = struct
     (type a b c)
     (Internal { len = left_len; child = left_child; _ } : (a, b, c) t)
     (Internal { len = center_len; child = center_child; _ } as center : (a, b, c) t)
-    (Internal { len = right_len; child = right_child; _ } : (a, b, c) t)
+    (Internal { len = right_len; child = right_child; _ } as right : (a, b, c) t)
     =
+    if not (phys_equal right none)
+    then [%test_result: int] right_len ~expect:(Array.length right_child);
     let left_len = left_len - 1 in
     let right_len = right_len - 1 in
     assert (not (phys_equal center none));
@@ -298,12 +300,14 @@ module Internal = struct
     let child = Array.create center_child.(0) ~len in
     Array.blit ~src:left_child ~src_pos:0 ~dst:child ~dst_pos:0 ~len:left_len;
     Array.blit ~src:center_child ~src_pos:0 ~dst:child ~dst_pos:left_len ~len:center_len;
-    Array.blit
-      ~src:right_child
-      ~src_pos:0
-      ~dst:child
-      ~dst_pos:(left_len + center_len)
-      ~len:right_len;
+    if not (phys_equal right none)
+    then
+      Array.blit
+        ~src:right_child
+        ~src_pos:1
+        ~dst:child
+        ~dst_pos:(left_len + center_len)
+        ~len:right_len;
     child
   ;;
 end
@@ -322,11 +326,10 @@ module Debug = struct
   let rec sexp_of_node : type a b c. (a -> Sexp.t) -> (a, b, c) node -> Sexp.t =
    fun sexp_of_a node ->
     match node with
-    | Leaf { len; child } -> [%sexp Leaf { len : int; child : a array }]
-    | Internal { len; child; size_table } ->
+    | Leaf { len = _; child } -> [%sexp Leaf (child : a array)]
+    | Internal { len = _; child; size_table } ->
       let child = Array.map child ~f:(sexp_of_node sexp_of_a) in
-      [%sexp
-        Internal { len : int; size_table : Size_table.t option; child : Sexp.t array }]
+      [%sexp Internal { size_table : Size_table.t option; child : Sexp.t array }]
  ;;
 
   let sexp_of_t sexp_of_a (Rrb { cnt; root; shift = _ }) =
@@ -386,6 +389,15 @@ let empty_leaf : _ Leaf.t = Leaf { len = 0; child = [||] }
 let empty = Rrb { cnt = 0; root = empty_leaf; shift = Shift.leaf }
 let length (Rrb t) = t.cnt
 
+let rec node_to_list : type a b c. (a, b, c) node -> a list -> a list =
+ fun node init ->
+  match node with
+  | Leaf l -> Array.fold_right l.child ~init ~f:List.cons
+  | Internal n -> Array.fold_right n.child ~init ~f:node_to_list
+;;
+
+let to_list (Rrb rrb) = node_to_list rrb.root []
+
 let append_part_exn left right ~left_len ~len =
   assert (Int.between left_len ~low:0 ~high:(Array.length left));
   assert (len > left_len);
@@ -408,27 +420,28 @@ let create_concat_plan (all : _ node array) =
       incr i
     done;
     let remaining_nodes = ref node_count.(!i) in
-    let min_size = Int.min rrb_branching (!remaining_nodes + node_count.(!i + 1)) in
-    remaining_nodes := !remaining_nodes + node_count.(!i + 1) - min_size;
-    incr i;
-    while !remaining_nodes > 0 do
+    let update_remaining_nodes () =
       let min_size = Int.min rrb_branching (!remaining_nodes + node_count.(!i + 1)) in
+      node_count.(!i) <- min_size;
       remaining_nodes := !remaining_nodes + node_count.(!i + 1) - min_size;
       incr i
+    in
+    update_remaining_nodes ();
+    while !remaining_nodes > 0 do
+      update_remaining_nodes ()
     done;
-    for j = !i to !shuffled_len - 2 do
-      node_count.(j) <- node_count.(j + 1)
-    done;
-    (*     Array.blit *)
-    (* ~src:node_count *)
-    (* ~src_pos:(!i + 1) *)
-    (* ~dst:node_count *)
-    (* ~dst_pos:!i *)
-    (* ~len:(!shuffled_len - 1); *)
+    Array.blit
+      ~src:node_count
+      ~src_pos:(!i + 1)
+      ~dst:node_count
+      ~dst_pos:!i
+      ~len:(!shuffled_len - (!i + 1));
     decr shuffled_len;
     decr i
   done;
-  Array.subo node_count ~len:!shuffled_len
+  let out = Array.subo node_count ~len:!shuffled_len in
+  [%test_result: int] (Array.sum (module Int) out ~f:Fn.id) ~expect:total_nodes;
+  out
 ;;
 
 let execute_concat_plan
@@ -440,76 +453,57 @@ let execute_concat_plan
   =
   let children : (a, b, c) node array =
     let child_shift = Shift.child shift in
-    match Shift.level child_shift with
-    | Internal ->
-      let idx = ref 0 in
-      let offset = ref 0 in
-      Array.map node_size ~f:(fun new_size ->
-        let old = all.(!idx) in
-        if !offset = 0 && new_size = len old
-        then (
-          incr idx;
-          old)
-        else (
-          let dst = Array.create (child old 0) ~len:new_size in
-          let cur_size = ref 0 in
-          while !cur_size < new_size do
-            assert (!idx < Array.length all);
-            let old = all.(!idx) in
-            let remaining_in_dst = new_size - !cur_size in
-            let remaining_in_old = len old - !offset in
-            let copied = Int.min remaining_in_dst remaining_in_old in
-            Array.blit
-              ~src:(children old)
-              ~src_pos:!offset
-              ~dst
-              ~dst_pos:!cur_size
-              ~len:copied;
-            cur_size := !cur_size + copied;
-            if remaining_in_dst >= remaining_in_old
-            then (
-              incr idx;
-              offset := 0)
-            else offset := !offset + copied
-          done;
-          Internal.create dst ~len:new_size ~with_sizes:(Some child_shift)))
-    | Leaf ->
-      let idx = ref 0 in
-      let offset = ref 0 in
-      Array.map node_size ~f:(fun new_size ->
-        let old : b Leaf.t = all.(!idx) in
-        if !offset = 0 && new_size = len old
-        then (
-          incr idx;
-          old)
-        else (
-          let dst = Array.create (child old 0) ~len:new_size in
-          let cur_size = ref 0 in
-          while !cur_size < new_size do
-            assert (!idx < Array.length all);
-            let old = all.(!idx) in
-            let remaining_in_dst = new_size - !cur_size in
-            let remaining_in_old = len old - !offset in
-            let copied = Int.min remaining_in_dst remaining_in_old in
-            Array.blit
-              ~src:(children old)
-              ~src_pos:!offset
-              ~dst
-              ~dst_pos:!cur_size
-              ~len:copied;
-            cur_size := !cur_size + copied;
-            if remaining_in_dst >= remaining_in_old
-            then (
-              incr idx;
-              offset := 0)
-            else offset := !offset + copied
-          done;
-          Leaf.create dst ~len:new_size))
+    let idx = ref 0 in
+    let offset = ref 0 in
+    Array.map node_size ~f:(fun new_size ->
+      let old = all.(!idx) in
+      if !offset = 0 && new_size = len old
+      then (
+        incr idx;
+        old)
+      else (
+        let dst = Array.create (child old 0) ~len:new_size in
+        let cur_size = ref 0 in
+        while !cur_size < new_size do
+          let old = all.(!idx) in
+          let remaining_in_dst = new_size - !cur_size in
+          let remaining_in_old = len old - !offset in
+          let copied = Int.min remaining_in_dst remaining_in_old in
+          Array.blit
+            ~src:(children old)
+            ~src_pos:!offset
+            ~dst
+            ~dst_pos:!cur_size
+            ~len:copied;
+          cur_size := !cur_size + copied;
+          if remaining_in_old < remaining_in_dst
+          then (
+            incr idx;
+            offset := 0)
+          else offset := !offset + copied
+        done;
+        match Shift.level child_shift with
+        | Internal -> Internal.create dst ~len:new_size ~with_sizes:(Some child_shift)
+        | Leaf -> Leaf.create dst ~len:new_size))
+  in
+  let () =
+    let actual = Array.fold_right children ~init:[] ~f:node_to_list in
+    let expect = Array.fold_right all ~init:[] ~f:node_to_list in
+    try [%test_result: int list] (Obj.magic actual) ~expect:(Obj.magic expect) with
+    | exn ->
+      let input = Array.map all ~f:(fun n : int list -> Obj.magic node_to_list n []) in
+      let output =
+        Array.map children ~f:(fun n : int list -> Obj.magic (node_to_list n []))
+      in
+      raise_s
+        [%message
+          (input : int list array)
+            (output : int list array)
+            (node_size : int array)
+            (exn : Exn.t)]
   in
   children
 ;;
-
-(* Internal.create  ~len:slen ~with_sizes:(Option.some_if with_sizes shift) *)
 
 type (_, _, _, _) is_top =
   | Top : ('a, 'b, 'c, (('a, 'b, 'c) node, ('a, 'b, 'c) Internal.t) Either.t) is_top
@@ -527,7 +521,15 @@ let rebalance
   let all = Internal.merge left center right in
   let node_count = create_concat_plan all in
   let new_all = execute_concat_plan all ~node_size:node_count ~shift in
-  let split () =
+  if Array.length new_all <= rrb_branching
+  then (
+    let t =
+      Internal.create new_all ~len:(Array.length new_all) ~with_sizes:(Some shift)
+    in
+    match is_top with
+    | Not_top -> Internal.singleton t
+    | Top -> First t)
+  else (
     (* TODO: optimize computing with_sizes? *)
     let left =
       Internal.create
@@ -541,18 +543,10 @@ let rebalance
         ~len:(Array.length new_all - rrb_branching)
         ~with_sizes:(Some shift)
     in
-    Internal.pair left right ~with_sizes:(Some (Shift.parent shift))
-  in
-  let keep () =
-    Internal.create new_all ~len:(Array.length new_all) ~with_sizes:(Some shift)
-  in
-  match is_top with
-  | Not_top ->
-    if Array.length new_all <= rrb_branching
-    then Internal.singleton (keep ())
-    else split ()
-  | Top ->
-    if Array.length new_all <= rrb_branching then First (keep ()) else Second (split ())
+    let node = Internal.pair left right ~with_sizes:(Some (Shift.parent shift)) in
+    match is_top with
+    | Not_top -> node
+    | Top -> Second node)
 ;;
 
 let rec concat_sub_tree_eq
@@ -737,7 +731,6 @@ let singleton x = Rrb { cnt = 1; root = Leaf.create [| x |] ~len:1; shift = Shif
 let cons x t = concat (singleton x) t
 let snoc t x = concat t (singleton x)
 let of_list l = List.fold l ~init:empty ~f:snoc
-let to_list t = List.init (length t) ~f:(get t)
 
 let init n ~f =
   let rec go i t = if i >= n then t else go (i + 1) (snoc t (f i)) in
@@ -756,6 +749,21 @@ include
 
 let%test_module _ =
   (module struct
+    let quickcheck_generator =
+      let rec go ~size ~random ~start =
+        match size with
+        | 0 -> empty
+        | 1 -> singleton start
+        | n ->
+          let i = Splittable_random.int random ~lo:1 ~hi:(n - 1) in
+          let r2 = Splittable_random.State.split random in
+          concat
+            (go ~size:i ~random ~start)
+            (go ~start:(start + i) ~size:(n - i) ~random:r2)
+      in
+      Quickcheck.Generator.create (go ~start:1)
+    ;;
+
     let quickcheck_generator_int = Int.gen_incl 0 9
 
     (* TODO: balancing invariant sometimes fails, is it correct? *)
@@ -768,6 +776,35 @@ let%test_module _ =
         try [%test_result: int list] (to_list t) ~expect:l with
         | exn -> raise_s [%sexp (t : int Debug.t), (exn : Exn.t)]
       done
+    ;;
+
+    let%test_unit "concat" =
+      Quickcheck.test
+        [%quickcheck.generator: t * t]
+        ~shrinker:[%quickcheck.shrinker: int t * int t]
+        ~sexp_of:[%sexp_of: int Debug.t * int Debug.t]
+        ~f:(fun (x, y) ->
+        let t = concat x y in
+        try
+          let expect = to_list x @ to_list y in
+          [%test_result: int] (length t) ~expect:(List.length expect);
+          for i = 0 to length t - 1 do
+            Exn.reraise_uncaught (Int.to_string i) (fun () ->
+              [%test_result: int] (get t i) ~expect:(List.nth_exn expect i))
+          done;
+          [%test_result: int list] (to_list t) ~expect
+        with
+        | exn -> raise_s [%sexp ~~(t : int Debug.t), (exn : Exn.t)])
+    ;;
+
+    let%expect_test "get" =
+      Quickcheck.test
+        [%quickcheck.generator: t]
+        ~sexp_of:[%sexp_of: int Debug.t]
+        ~f:(fun t ->
+        for i = 0 to length t - 1 do
+          [%test_result: int] (get t i) ~expect:(i + 1)
+        done)
     ;;
 
     let%test_unit "list conversions" =
